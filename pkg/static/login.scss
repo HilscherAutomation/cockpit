@@ -1,6 +1,46 @@
 /* Login page is standalone, all related CSS is here */
 
 @font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 300;
+  src: url("fonts/Inter/Inter-Light.woff2") format("woff2");
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400;
+  src: url("fonts/Inter/Inter-Regular.woff2") format("woff2");
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter";
+  font-style: italic;
+  font-weight: 400;
+  src: url("fonts/Inter/Inter-Italic.woff2") format("woff2");
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 700;
+  src: url("fonts/Inter/Inter-Bold.woff2") format("woff2");
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 900;
+  src: url("fonts/Inter/Inter-Black.woff2") format("woff2");
+  font-display: swap;
+}
+
+@font-face {
   font-family: "Red Hat Text";
   font-style: normal;
   font-weight: 400 500;
@@ -166,7 +206,7 @@ html {
 
 body {
   margin: 0;
-  font-family: "Red Hat Text", RedHatText, Helvetica, Arial, sans-serif;
+  font-family: "Inter", Helvetica, Arial, sans-serif;
   background-color: var(--color-body-background);
   color: var(--color-text);
   line-height: 1.5;

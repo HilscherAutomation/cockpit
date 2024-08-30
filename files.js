@@ -204,6 +204,17 @@ const redhat_fonts_variable_font = [
     };
 });
 
+const inter_fonts = [
+    "Inter-Black.woff2",
+    "Inter-Bold.woff2",
+    "Inter-Italic.woff2",
+    "Inter-Light.woff2",
+    "Inter-Regular.woff2",
+].map(name => ({
+    from: path.resolve(srcdir, "src/branding/netfield/fonts/Inter", name),
+    to: "static/fonts/Inter"
+}));
+
 const pkgfile = suffix => `${srcdir}/pkg/${suffix}`;
 export const getFiles = subdir => {
     /* Qualify all the paths in entries */
@@ -231,7 +242,7 @@ export const getFiles = subdir => {
         });
     }
 
-    return ({ entryPoints, assetFiles: files, redhat_fonts: redhat_fonts.concat(redhat_fonts_variable_font) });
+    return ({ entryPoints, assetFiles: files, redhat_fonts: redhat_fonts.concat(redhat_fonts_variable_font, inter_fonts) });
 };
 
 export const getTestFiles = () => info.tests;
