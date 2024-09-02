@@ -35,6 +35,15 @@
       </h2>
     </div>
 
+    <div id="disclaimer-error-group" class="pf-v5-c-alert pf-m-danger pf-m-inline dialog-error disclaimer-error" aria-label="inline danger alert">
+      <svg fill="currentColor" viewBox="0 0 512 512" aria-hidden="true">
+        <path d="M504 256c0 136.997-111.043 248-248 248S8 392.997 8 256C8 119.083 119.043 8 256 8s248 111.083 248 248zm-248 50c-25.405 0-46 20.595-46 46s20.595 46 46 46 46-20.595 46-46-20.595-46-46-46zm-43.673-165.346l7.418 136c.347 6.364 5.609 11.346 11.982 11.346h28.546c6.373 0 11.635-4.982 11.982-11.346l7.418-136c.375-6.874-5.098-12.654-11.982-12.654h-63.383c-6.884 0-12.356 5.78-11.981 12.654z" />
+      </svg>
+      <h2 id="disclaimer-error-message" class="pf-v5-c-alert__title">
+        <span class="noscript" translate="yes"></span>
+      </h2>
+    </div>
+
     <div class="unsupported-browser" id="unsupported-browser" hidden="true">
       <h2 class="unsupported-browser-heading" translate="yes">A modern browser is required for security, reliability, and performance.</h2>
       <div class="browser-recommendations">
@@ -114,23 +123,14 @@
           <input type="password" class="form-control" id="conversation-input" autocomplete="one-time-code" />
         </div>
 
-        <div id="option-group">
-          <a href="#" id="show-other-login-options">
-            <svg height="16" width="16" viewBox="0 0 16 16" id="option-caret" class="caret caret-right" aria-hidden="true">
-              <polygon fill="#ffffff" points="4,0 4,14 12,7"></polygon>
-            </svg><span id="show-other-login-options-text" translate="yes">Other options</span>
-            <!-- Above: Span needs to be immediately next to SVG to prevent whitespace in the link -->
-          </a>
+        <div id="legal-disclaimer-group" class="disclaimer-checkbox-group">
+          <input type="checkbox" id="acceptLegalDisclaimer" name="acceptLegalDisclaimer">
+          <label id="acceptLegalDisclaimerLabel" for="acceptLegalDisclaimer">I have read and accept the <a href="cockpit/static/disclaimer" target="_blank">Disclaimer</a> </label>
         </div>
 
-        <div id="server-group" class="form-group" hidden="true">
-          <label title="Log in to another system. Leave blank to log in to the local system." for="server-field" id="server-field-label" class="control-label" translate="yes">Connect to</label>
-          <div class="server-box">
-            <input type="text" class="form-control" id="server-field" placeholder=" " />
-            <span class="input-clear" id="server-clear" aria-hidden="true">
-              <svg fill="currentColor" viewBox="0 0 352 512"><path d="m242.72 256 100.07-100.07c12.28-12.28 12.28-32.19 0-44.48l-22.24-22.24c-12.28-12.28-32.19-12.28-44.48 0L176 189.28 75.93 89.21c-12.28-12.28-32.19-12.28-44.48 0L9.21 111.45c-12.28 12.28-12.28 32.19 0 44.48L109.28 256 9.21 356.07c-12.28 12.28-12.28 32.19 0 44.48l22.24 22.24c12.28 12.28 32.2 12.28 44.48 0L176 322.72l100.07 100.07c12.28 12.28 32.2 12.28 44.48 0l22.24-22.24c12.28-12.29 12.28-32.19 0-44.48z"/></svg>
-            </span>
-          </div>
+        <div id="option-group">
+          <a href="#" id="show-other-login-options">
+          </a>
         </div>
 
         <div class="form-group login-actions">

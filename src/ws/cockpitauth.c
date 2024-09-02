@@ -23,6 +23,8 @@
 
 #include "cockpitws.h"
 
+#include "hilscherlegaldisclaimer.h"
+
 #include "websocket/websocket.h"
 
 #include "common/cockpitauthorize.h"
@@ -127,6 +129,9 @@ typedef struct {
 
   /* The conversation in progress */
   gchar *conversation;
+
+  /* State of the hilscher cookie disclaimer*/
+  DISCLAIMER_COOKIE_STATE_E disclaimerCookieState;
 } CockpitSession;
 
 static void
@@ -1496,6 +1501,17 @@ cockpit_auth_login_async (CockpitAuth *self,
       goto out;
     }
 
+  // Hilscher specific code
+  // Store the disclaimer cookie state into the session object
+  GHashTable * headers = cockpit_web_request_get_headers (request);
+  session->disclaimerCookieState = hilscher_getDisclaimerCookieState (headers);
+  if (session->disclaimerCookieState == DISCLAIMER_COOKIE_ERROR)
+    {
+      g_task_return_new_error (task, COCKPIT_ERROR, COCKPIT_ERROR_FAILED,
+                               "Error reading cookies");
+      goto out;
+    }
+
   reset_authorize_timeout (session, FALSE);
 
 out:
@@ -1518,11 +1534,25 @@ cockpit_auth_login_finish (CockpitAuth *self,
   gchar *cookie_b64;
   gchar *header;
   gchar *id;
+  gboolean success = FALSE;
 
   g_return_val_if_fail (g_task_is_valid (result, self), NULL);
 
   if (!g_task_propagate_boolean (G_TASK (result), error))
-    goto out;
+    {
+      // Here the authentication has failed wrong username or password
+
+      // Hilscher specific code
+      // If the authentication has failed and the legal disclaimer has not been accepted yet,
+      // replace the error to ask the user for acceptance again
+      if (!hilscher_legalDisclaimerAccepted ())
+        {
+          g_clear_error (error);
+          g_set_error (error, COCKPIT_ERROR, COCKPIT_ERROR_HILSCHER_DISCLAIMER_AND_AUTHENTICATION_FAILED,
+                       "legal-disclaimer-acceptance-and-authentication-required");
+        }
+      goto out;
+    }
 
   session = g_task_get_task_data (G_TASK (result));
   g_return_val_if_fail (session != NULL, NULL);
@@ -1578,6 +1608,18 @@ cockpit_auth_login_finish (CockpitAuth *self,
     {
       g_set_error (error, COCKPIT_ERROR, COCKPIT_ERROR_AUTHENTICATION_FAILED,
                    "Authentication failed");
+    }
+
+  // Hilscher specific code
+  // If this point is reached, a user is authenticated
+  // If the disclaimer cookie state is true the legal discalimer is accepted
+  if (session->disclaimerCookieState == DISCLAIMER_COOKIE_SET_TRUE)
+    {
+      success = hilscher_acceptLegalDisclaimer ();
+      if (!success)
+        {
+          g_warning ("Unable to store legal disclaimer acceptance");
+        }
     }
 
 out:
