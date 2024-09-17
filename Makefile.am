@@ -147,6 +147,32 @@ UNINSTALL_LOCAL_TARGETS =
 .PHONY: $(UNINSTALL_LOCAL_TARGETS)
 uninstall-local:: $(UNINSTALL_LOCAL_TARGETS)
 
+#Hilscher rules to create the plugin filter files when installing
+SCRIPT_PATH = $(srcdir)/os-installation/create-plugin-filter-files.sh
+
+HILSCHER_INSTALL_EXEC_HOOK_TARGETS = install-hilscher-plugin-filter-files
+.PHONY: $(HILSCHER_INSTALL_EXEC_HOOK_TARGETS)
+
+install-hilscher-plugin-filter-files:
+	@if [ -n "$(DEVICE)" ]; then \
+			echo "Running create-plugin-filter.sh with --device $(DEVICE)..."; \
+			$(SCRIPT_PATH) --device $(DEVICE); \
+	else \
+			echo "Running create-plugin-filter.sh with default arguments..."; \
+			$(SCRIPT_PATH); \
+	fi
+
+install-exec-hook:: $(HILSCHER_INSTALL_EXEC_HOOK_TARGETS)
+
+HILSCHER_UNINSTALL_EXEC_HOOK_TARGETS = uninstall-hilscher-plugin-filter-files
+.PHONY: $(HILSCHER_UNINSTALL_EXEC_HOOK_TARGETS)
+
+uninstall-hilscher-plugin-filter-files:
+	@echo "Removing plugin filter files..."
+	@rm -f /etc/cockpit/*.json
+
+uninstall-local:: $(HILSCHER_UNINSTALL_EXEC_HOOK_TARGETS)
+
 
 # This Makefile includes several variable definitions that must come first
 include src/testlib/Makefile.am
