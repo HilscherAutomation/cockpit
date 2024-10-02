@@ -290,6 +290,7 @@ label {
   display: inline-block;
 }
 
+#option-group,
 .control-label {
   font-size: 0.875rem;
 }
@@ -924,6 +925,25 @@ input[type="password"] + .login-password-toggle .password-hide {
 
 .pf-v6-c-helper-text.pf-m-warning {
   color: var(--color-alert-warning-text);
+}
+
+.disclaimer-checkbox-group {
+  display: none;
+  margin-top: 10px;
+}
+
+.disclaimer-checkbox-group.visible {
+  display: block;
+  margin-top: 10px;
+}
+
+.disclaimer-error {
+  display: none;
+}
+
+.disclaimer-error.visible {
+  display: flex;
+  align-items: center;
 }
 
 /* Layout */
