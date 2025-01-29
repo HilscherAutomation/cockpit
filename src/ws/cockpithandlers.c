@@ -450,7 +450,9 @@ send_login_html (CockpitWebResponse *response,
 
   if (ws->login_po_js)
     {
-      language = cockpit_web_server_parse_cookie (headers, "CockpitLang");
+      // Hilscher specific
+      // ignore 'CockpitLang' cookie and set default language to 'en'
+      language = g_strdup ("en");
       if (!language)
         {
           accept = g_hash_table_lookup (headers, "Accept-Language");

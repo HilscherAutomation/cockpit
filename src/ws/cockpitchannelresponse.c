@@ -533,9 +533,12 @@ parse_host_and_etag (CockpitWebService *service,
   gchar *language;
 
   /* Parse the language out of the CockpitLang cookie and set Accept-Language */
-  language = cockpit_web_server_parse_cookie (headers, "CockpitLang");
-  if (language)
+  // Hilscher specific
+  // ignore 'CockpitLang' cookie and set default language to 'en'
+  language = g_strdup ("en"); 
+  if (language) {
     g_hash_table_replace (headers, g_strdup ("Accept-Language"), language);
+  }
 
   if (!where)
     {

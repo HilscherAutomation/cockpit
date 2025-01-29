@@ -368,6 +368,17 @@ function debug(...args) {
             redirect_to_current_machine();
     }
 
+    function setCookie(name, value, days) {
+        let expires = "";
+        if (days) {
+            const date = new Date();
+            date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+            expires = "; expires=" + date.toUTCString();
+        }
+        document.cookie = name + "=" + (value || "") + expires + "; path=/";
+        
+    }
+
     function boot() {
         window.onload = null;
 
@@ -1249,6 +1260,12 @@ function debug(...args) {
 
         return null;
     }
+
+    // Hilscher specific
+    // Set the CockpitLang cookie to 'en'
+    setCookie('CockpitLang', 'en', 365);
+    // Set the HTML header lang attribute to 'en'
+    document.documentElement.lang = 'en';
 
     window.onload = boot;
 })(window.console);
