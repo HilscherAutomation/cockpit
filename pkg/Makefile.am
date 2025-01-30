@@ -40,6 +40,11 @@ $(DIST_STAMP): $(srcdir)/package-lock.json $(PKG_INPUTS)
 
 EXTRA_DIST += build.js files.js package.json package-lock.json
 
+###################################### test change ######################################
+
+
+###################################### test change ######################################
+
 INSTALL_DATA_LOCAL_TARGETS += install-bundles
 install-bundles:
 	cd $(srcdir)/dist; find */* -type f -exec install -D -m 644 '{}' '$(abspath $(DESTDIR)$(datadir))/cockpit/{}' \;
