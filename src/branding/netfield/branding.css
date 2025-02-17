@@ -12,7 +12,7 @@
   --hil-variant5: var(--secondary-variant5);
   --secondary-variant6: var(--secondary-variant6);
   --button-hover: var(--primary-variant1);
-  
+
   --primary-variant2-blur: #ffffff80;
 
   --box-shadow: 0px 9px 28px 8px rgb(0 0 0 / 0.05), 0px 3px 6px -4px rgb(0 0 0 / 0.12), 0px 6px 16px 0px rgb(0 0 0 / 0.08);
@@ -210,13 +210,14 @@ body {
 }
 
 .pf-v5-c-masthead__content::before {
-  content: url("logo-header.png");
-  display: block;
+  content: url("HIL_netFIELD-LOCAL_Logo_Black.svg");
+  min-width: 250px;
+  display: inline-block;
 }
 
 #topnav {
     text-align: center;
-    border-bottom: 1rem solid transparent;
+    border-bottom: 9px solid transparent;
     border-image: linear-gradient(90deg, #fff 0.76%, #57ebe5 31.77%, #89A9AF 42.11%, #f90e35 65.37%, #83c5c7 100%);
     border-image-slice: 1;
     width: 100%;
@@ -279,8 +280,18 @@ mark {
 }
 
 /* Session toggle-menu  */
-.display-language-menu {
+/* hide the language and style buttons 'Default, Light, Dark' */
+#toggle-menu-menu > div > ul > hr.pf-v5-c-divider.mobile_v,
+#toggle-menu-menu > div > ul > section,
+#toggle-menu-menu > div > ul > li.pf-v5-c-menu__list-item.display-language-menu {
   display: none;
+}
+.pf-v5-c-menu__list {
+  padding-block-start: 0 !important;
+  
+}
+.pf-v5-c-menu {
+  --pf-v5-c-menu__list--c-divider--MarginTop: 0 !important;
 }
 
 /* sidebar */
@@ -453,17 +464,35 @@ button.ct-nav-toggle {
   color: var(--secondary-variant1) !important;
 }
 
+#super-user-indicator-mobile > button > span
+#super-user-indicator-mobile > button > span > svg,
 .pf-v5-c-toolbar__content button.pf-v5-c-button.pf-m-link {
+  color: var(--primary-main) !important;
   background-color: var(--primary-variant2) !important;
 }
+
+#toggle-docs-menu svg,
+#toggle-docs-menu svg,
+#super-user-indicator-mobile > button > span > svg {
+  color: var(--primary-variant1) !important;
+}
+
+#toolbar:hover {
+  color: var(--primary-button-hover) !important;
+}
+
+#toggle-docs-menu > div > ul > li > a:hover,
+#toggle-docs-menu > div > ul > li > button:hover,
+#toggle-menu-menu > div > ul > li > button:hover,
+#super-user-indicator-mobile > button:hover,
+#super-user-indicator-mobile:hover {
+  background-color: var(--secondary-variant5) !important;
+}
+
 .pf-v5-c-toolbar__content button.pf-v5-c-button.pf-m-link:hover {
   background-color: var(--primary-variant2) !important;
 }
 
-button.pf-v5-c-button.pf-m-link {
-  color: var(--primary-variant2) !important;
-  background-color: var(--secondary-accent1) !important;
-}
 button.pf-v5-c-button.pf-m-link:hover {
   background-color: var(--secondary-button-hover) !important;
 }
@@ -546,7 +575,7 @@ button.pf-v5-c-button.pf-m-link:hover {
 #badge {
     width: 220px;
     height: 80px;
-    background-image: url("logo-netfield.png");
+    background-image: url("HIL_netFIELD-Logo_Black.svg");
     background-size: contain;
     background-repeat: no-repeat;
 }
