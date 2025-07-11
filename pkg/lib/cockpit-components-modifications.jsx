@@ -22,13 +22,16 @@ import React from 'react';
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
 import { Card, CardBody, CardHeader, CardTitle } from "@patternfly/react-core/dist/esm/components/Card/index.js";
 import { DataList, DataListCell, DataListItem, DataListItemCells, DataListItemRow } from "@patternfly/react-core/dist/esm/components/DataList/index.js";
-import { Modal } from "@patternfly/react-core/dist/esm/components/Modal/index.js";
+import {
+    Modal, ModalBody, ModalFooter, ModalHeader
+} from '@patternfly/react-core/dist/esm/components/Modal/index.js';
 import { Tab, Tabs } from "@patternfly/react-core/dist/esm/components/Tabs/index.js";
 import { TextArea } from "@patternfly/react-core/dist/esm/components/TextArea/index.js";
 import { CheckIcon, CopyIcon, ExternalLinkAltIcon, OutlinedQuestionCircleIcon } from '@patternfly/react-icons';
 
 import cockpit from "cockpit";
 import 'cockpit-components-modifications.css';
+import { Icon } from '@patternfly/react-core';
 
 const _ = cockpit.gettext;
 
@@ -37,8 +40,8 @@ const _ = cockpit.gettext;
  * Enables showing shell and ansible script. Shell one is mandatory and ansible one can be omitted.
  *
  */
-export const ModificationsExportDialog = ({ show, onClose, shell, ansible }) => {
-    const [active_tab, setActiveTab] = React.useState("ansible");
+export const ModificationsExportDialog = ({ onClose, shell, ansible }) => {
+    const [active_tab, setActiveTab] = React.useState(ansible ? "ansible" : "shell");
     const [copied, setCopied] = React.useState(false);
     const [timeoutId, setTimeoutId] = React.useState(null);
 
@@ -68,39 +71,43 @@ export const ModificationsExportDialog = ({ show, onClose, shell, ansible }) => 
     };
 
     const footer = (
-        <>
-            <Button variant='secondary' className="btn-clipboard" onClick={copyToClipboard} icon={copied ? <CheckIcon className="green-icon" /> : <CopyIcon />}>
+        <ModalFooter>
+            <Button variant='secondary' className="btn-clipboard" onClick={copyToClipboard} icon={copied ? <Icon status="success"><CheckIcon /></Icon> : <CopyIcon />}>
                 { _("Copy to clipboard") }
             </Button>
             <Button variant='secondary' className='btn-cancel' onClick={onClose}>
                 { _("Close") }
             </Button>
-        </>
+        </ModalFooter>
     );
 
     return (
-        <Modal isOpen={show} className="automation-script-modal"
+        <Modal isOpen className="automation-script-modal"
                position="top" variant="medium"
-               onClose={onClose}
-               footer={footer}
-               title={_("Automation script") }>
-            <Tabs activeKey={active_tab} onSelect={handleSelect}>
-                <Tab eventKey="ansible" title={_("Ansible")}>
-                    <TextArea resizeOrientation='vertical' readOnlyVariant="default" defaultValue={ansible.trim()} />
-                    <div className="ansible-docs-link">
-                        <OutlinedQuestionCircleIcon />
-                        { _("Create new task file with this content.") }
-                        <Button variant="link" component="a" href="https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_reuse_roles.html"
-                                target="_blank" rel="noopener noreferrer"
-                                icon={<ExternalLinkAltIcon />}>
-                            { _("Ansible roles documentation") }
-                        </Button>
-                    </div>
-                </Tab>
-                <Tab eventKey="shell" title={_("Shell script")}>
-                    <TextArea resizeOrientation='vertical' readOnlyVariant="default" defaultValue={shell.trim()} />
-                </Tab>
-            </Tabs>
+               onClose={onClose}>
+            <ModalHeader title={_("Automation script") } />
+            <ModalBody>
+                <Tabs activeKey={active_tab} onSelect={handleSelect}>
+                    { ansible &&
+                        <Tab eventKey="ansible" title={_("Ansible")}>
+                            <TextArea resizeOrientation='vertical' readOnlyVariant="default" defaultValue={ansible.trim()} />
+                            <div className="ansible-docs-link">
+                                <OutlinedQuestionCircleIcon />
+                                { _("Create new task file with this content.") }
+                                <Button variant="link" component="a" href="https://docs.ansible.com/ansible/latest/playbook_guide/playbooks_reuse_roles.html"
+                                        target="_blank" rel="noopener noreferrer"
+                                        icon={<ExternalLinkAltIcon />}>
+                                    { _("Ansible roles documentation") }
+                                </Button>
+                            </div>
+                        </Tab>
+                    }
+                    <Tab eventKey="shell" title={_("Shell script")}>
+                        <TextArea resizeOrientation='vertical' readOnlyVariant="default" defaultValue={shell.trim()} />
+                    </Tab>
+                </Tabs>
+            </ModalBody>
+            {footer}
         </Modal>
     );
 };
@@ -108,7 +115,6 @@ export const ModificationsExportDialog = ({ show, onClose, shell, ansible }) => 
 ModificationsExportDialog.propTypes = {
     shell: PropTypes.string.isRequired,
     ansible: PropTypes.string.isRequired,
-    show: PropTypes.bool.isRequired,
     onClose: PropTypes.func.isRequired,
 };
 
@@ -145,8 +151,11 @@ export const Modifications = ({ entries, failed, permitted, title, shell, ansibl
 
     return (
         <>
-            <ModificationsExportDialog show={showDialog} shell={shell} ansible={ansible} onClose={() => setShowDialog(false)} />
-            <Card className="modifications-table">
+            { showDialog &&
+                <ModificationsExportDialog shell={shell} ansible={ansible}
+                onClose={() => setShowDialog(false)} />
+            }
+            <Card isPlain className="modifications-table">
                 <CardHeader>
                     <CardTitle component="h2">{title}</CardTitle>
                     { !emptyRow &&
@@ -178,5 +187,5 @@ Modifications.propTypes = {
     permitted: PropTypes.bool.isRequired,
     entries: PropTypes.arrayOf(PropTypes.string),
     shell: PropTypes.string.isRequired,
-    ansible: PropTypes.string.isRequired,
+    ansible: PropTypes.string,
 };

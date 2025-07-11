@@ -43,7 +43,7 @@ import {
 } from "../utils.js";
 
 import {
-    dialog_open, SelectSpaces, TextInput, PassInput, SelectOne, SizeSlider, CheckBoxes,
+    dialog_open, SelectSpaces, TextInput, PassInput, SelectOne, SizeSlider, CheckBoxes, Group,
     BlockingMessage, TeardownMessage,
     init_teardown_usage
 } from "../dialog.jsx";
@@ -62,6 +62,7 @@ import { make_stratis_filesystem_page } from "./filesystem.jsx";
 const _ = cockpit.gettext;
 
 const fsys_min_size = 512 * 1024 * 1024;
+const fsys_round_size = 1024 * 1024;
 
 function destroy_pool(pool) {
     return for_each_async(client.stratis_pool_filesystems[pool.path], fsys => destroy_filesystem(fsys))
@@ -92,33 +93,42 @@ function create_fs(pool) {
                       {
                           validate: name => validate_fs_name(null, name, filesystems)
                       }),
-            CheckBoxes("size_options", _("Manage virtual size"),
-                       {
-                           value: {
-                               custom_size: !pool.Overprovisioning,
-                               custom_limit: false,
-                           },
-                           fields: [
-                               { tag: "custom_size", title: _("Specify initial virtual filesystem size") },
-                               { tag: "custom_limit", title: _("Limit virtual filesystem size") },
-                           ]
-                       }),
-            SizeSlider("size", _("Initial virtual size"),
-                       {
-                           visible: vals => vals.size_options.custom_size,
-                           min: fsys_min_size,
-                           max: pool.Overprovisioning ? stats.pool_total : stats.pool_free,
-                           allow_infinite: pool.Overprovisioning,
-                           round: 512
-                       }),
-            SizeSlider("limit", _("Virtual size limit"),
-                       {
-                           visible: vals => vals.size_options.custom_limit,
-                           min: fsys_min_size,
-                           max: pool.Overprovisioning ? stats.pool_total : stats.pool_free,
-                           allow_infinite: true,
-                           round: 512
-                       }),
+            Group(_("Stratis filesystem"), [
+                CheckBoxes("set_custom_size", null,
+                           {
+                               value: {
+                                   enabled: !pool.Overprovisioning,
+                               },
+                               fields: [
+                                   { tag: "enabled", title: _("Set initial size") },
+                               ]
+                           }),
+                SizeSlider("size", null,
+                           {
+                               visible: vals => vals.set_custom_size.enabled,
+                               min: fsys_min_size,
+                               max: pool.Overprovisioning ? stats.pool_total : stats.pool_free,
+                               allow_infinite: pool.Overprovisioning,
+                               round: fsys_round_size,
+                           }),
+                CheckBoxes("set_custom_limit", null,
+                           {
+                               value: {
+                                   enabled: false,
+                               },
+                               fields: [
+                                   { tag: "enabled", title: _("Limit size") },
+                               ]
+                           }),
+                SizeSlider("limit", null,
+                           {
+                               visible: vals => vals.set_custom_limit.enabled,
+                               min: fsys_min_size,
+                               max: pool.Overprovisioning ? stats.pool_total : stats.pool_free,
+                               allow_infinite: true,
+                               round: fsys_round_size,
+                           }),
+            ]),
             TextInput("mount_point", _("Mount point"),
                       {
                           validate: (val, values, variant) => {
@@ -136,9 +146,9 @@ function create_fs(pool) {
             Variants: action_variants,
             action: async function (vals) {
                 let size_spec = [false, ""]; let limit_spec = [false, ""];
-                if (vals.size_options.custom_size)
+                if (vals.set_custom_size.enabled)
                     size_spec = [true, vals.size.toString()];
-                if (vals.size_options.custom_limit)
+                if (vals.set_custom_limit.enabled)
                     limit_spec = [true, vals.limit.toString()];
                 const result = await pool.CreateFilesystems([[vals.name, size_spec, limit_spec]]).then(std_reply);
                 if (result[0])
@@ -228,7 +238,7 @@ function add_disks(pool) {
                                      if (disks.length === 0)
                                          return _("At least one disk is needed.");
                                  },
-                                 spaces: get_available_spaces(client)
+                                 spaces: get_available_spaces()
                              })
             ],
             Action: {
@@ -366,11 +376,10 @@ const StratisFilesystemsCard = ({ card, pool, degraded_ops, can_grow, stats }) =
 
     return (
         <StorageCard card={card} alerts={alerts}>
-            <CardBody className="contains-list">
-                <ChildrenTable emptyCaption={_("No filesystems")}
-                               aria-label={_("Stratis filesystems pool")}
-                               page={card.page} />
-            </CardBody>
+            <ChildrenTable
+                emptyCaption={_("No filesystems")}
+                aria-label={_("Stratis filesystems pool")}
+                page={card.page} />
         </StorageCard>
     );
 };
@@ -589,11 +598,10 @@ const StratisPoolCard = ({ card, pool, degraded_ops, can_grow, stats }) => {
                 </DescriptionList>
             </CardBody>
             <CardHeader><strong>{_("Block devices")}</strong></CardHeader>
-            <CardBody className="contains-list">
-                <PageTable emptyCaption={_("No block devices found")}
-                           aria-label={_("Stratis block devices")}
-                           crossrefs={get_crossrefs(pool)} />
-            </CardBody>
+            <PageTable
+                emptyCaption={_("No block devices found")}
+                aria-label={_("Stratis block devices")}
+                crossrefs={get_crossrefs(pool)} />
         </StorageCard>
     );
 };

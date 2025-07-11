@@ -23,11 +23,13 @@ import storagelib
 import testlib
 
 
+@testlib.nondestructive
 class TestStorageMdRaid(storagelib.StorageCase):
 
     def wait_states(self, states):
         for s in states.keys():
-            self.browser.wait_in_text(self.card_row("MDRAID device", name=s), states[s])
+            with self.browser.wait_timeout(30):
+                self.browser.wait_in_text(self.card_row("MDRAID device", name=s), states[s])
 
     def raid_add_disk(self, name):
         self.dialog_open_with_retry(trigger=lambda: self.browser.click(self.card_button("MDRAID device", "Add disk")),
@@ -79,13 +81,13 @@ class TestStorageMdRaid(storagelib.StorageCase):
         self.login_and_go("/storage")
 
         # Add four disks and make a RAID out of three of them
-        disk1 = "/dev/" + m.add_disk("50M", serial="DISK1")["dev"]
+        disk1 = self.add_ram_disk()
         b.wait_visible(self.card_row("Storage", name=disk1))
-        disk2 = "/dev/" + m.add_disk("50M", serial="DISK2")["dev"]
+        disk2 = self.add_loopback_disk(name="loop5")
         b.wait_visible(self.card_row("Storage", name=disk2))
-        disk3 = "/dev/" + m.add_disk("50M", serial="DISK3")["dev"]
+        disk3 = self.add_loopback_disk(name="loop6")
         b.wait_visible(self.card_row("Storage", name=disk3))
-        disk4 = "/dev/" + m.add_disk("50M", serial="DISK4")["dev"]
+        disk4 = self.add_loopback_disk(name="loop7")
         b.wait_visible(self.card_row("Storage", name=disk4))
 
         self.click_devices_dropdown('Create MDRAID device')
@@ -110,6 +112,9 @@ class TestStorageMdRaid(storagelib.StorageCase):
         self.dialog_wait_close()
         b.wait_visible(self.card_row("Storage", name="/dev/md/raid0"))
 
+        self.addCleanup(m.execute, "if [ -e /dev/md/raid0 ]; then mdadm --stop /dev/md/raid0; fi")
+        self.addCleanup(m.execute, "mount | grep ^/dev/md | cut -f1 -d' ' | xargs -r umount")
+
         # Check that Cockpit suggest name that does not yet exists
         self.click_devices_dropdown('Create MDRAID device')
         b.wait(lambda: self.dialog_val("name") == "raid1")
@@ -123,7 +128,7 @@ class TestStorageMdRaid(storagelib.StorageCase):
                           disk3: "In sync"})
 
         def wait_degraded_state(is_degraded):
-            degraded_selector = ".pf-v5-c-alert h4"
+            degraded_selector = ".pf-v6-c-alert h4"
             if is_degraded:
                 b.wait_in_text(degraded_selector, 'The MDRAID device is in a degraded state')
             else:
@@ -138,7 +143,7 @@ class TestStorageMdRaid(storagelib.StorageCase):
 
         # Degrade and repair it
 
-        m.execute(f"mdadm --quiet {dev} --fail /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_DISK1; udevadm trigger")
+        m.execute(f"mdadm --quiet {dev} --fail {disk1}; udevadm trigger")
         wait_degraded_state(is_degraded=True)
 
         self.wait_states({disk1: "Failed"})
@@ -202,7 +207,7 @@ class TestStorageMdRaid(storagelib.StorageCase):
         self.raid_add_disk(disk4)
         self.wait_states({disk4: "Spare"})
 
-        # Remove DISK1.  The spare takes over.
+        # Remove disk1.  The spare takes over.
         self.raid_remove_disk(disk1)
         try:
             b.wait_not_present(self.card_row("MDRAID device", name=disk1))
@@ -225,26 +230,27 @@ class TestStorageMdRaid(storagelib.StorageCase):
         b.assert_pixels('#dialog', "stop-busy")
         self.dialog_apply()
         self.dialog_wait_close()
-        self.raid_default_action_finish("Stop")
-        b.wait_text(self.card_desc("MDRAID device", "State"), "Not running")
-        m.execute("wipefs -a /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_DISK2")
-        b.wait_not_present(self.card_row("MDRAID device", name=disk2))
-        self.raid_default_action("Start")
-        b.wait_text(self.card_desc("MDRAID device", "State"), "Running")
-        wait_degraded_state(is_degraded=True)
+        with b.wait_timeout(60):
+            self.raid_default_action_finish("Stop")
+            b.wait_text(self.card_desc("MDRAID device", "State"), "Not running")
+            m.execute(f"wipefs -a {disk2}")
+            b.wait_not_present(self.card_row("MDRAID device", name=disk2))
+            self.raid_default_action("Start")
+            b.wait_text(self.card_desc("MDRAID device", "State"), "Running")
+            wait_degraded_state(is_degraded=True)
 
-        # Add DISK1.  The array recovers.
+        # Add disk.  The array recovers.
         self.raid_add_disk(disk1)
         self.wait_states({disk1: "In sync"})
         wait_degraded_state(is_degraded=False)
 
-        # Add DISK2 again, as a spare
+        # Add disk again, as a spare
         self.raid_add_disk(disk2)
         self.wait_states({disk2: "Spare"})
 
-        # Remove it by formatting DISK2
+        # Remove it by formatting disk2
         self.click_card_row("MDRAID device", name=disk2)
-        self.click_card_dropdown("Hard Disk Drive", "Create partition table")
+        self.click_card_dropdown("Block device", "Create partition table")
         b.wait_in_text('#dialog', "remove from MDRAID, initialize")
         self.dialog_set_val("type", "empty")
         self.dialog_apply()
@@ -268,11 +274,11 @@ class TestStorageMdRaid(storagelib.StorageCase):
 
         self.login_and_go("/storage")
 
-        disk1 = "/dev/" + m.add_disk("50M", serial="DISK1")["dev"]
+        disk1 = self.add_ram_disk()
         b.wait_visible(self.card_row("Storage", name=disk1))
-        disk2 = "/dev/" + m.add_disk("50M", serial="DISK2")["dev"]
+        disk2 = self.add_loopback_disk()
         b.wait_visible(self.card_row("Storage", name=disk2))
-        disk3 = "/dev/" + m.add_disk("50M", serial="DISK3")["dev"]
+        disk3 = self.add_loopback_disk()
         b.wait_visible(self.card_row("Storage", name=disk3))
 
         self.click_devices_dropdown('Create MDRAID device')
@@ -283,6 +289,8 @@ class TestStorageMdRaid(storagelib.StorageCase):
         self.dialog_apply()
         self.dialog_wait_close()
 
+        self.addCleanup(m.execute, "mdadm --stop /dev/md/ARR")
+
         self.click_card_row("Storage", name="/dev/md/ARR")
 
         self.wait_states({disk1: "In sync",
@@ -290,14 +298,15 @@ class TestStorageMdRaid(storagelib.StorageCase):
 
         # All buttons should be disabled when the array is stopped
 
-        self.raid_default_action("Stop")
-        b.wait_text(self.card_desc("MDRAID device", "State"), "Not running")
+        with b.wait_timeout(60):
+            self.raid_default_action("Stop")
+            b.wait_text(self.card_desc("MDRAID device", "State"), "Not running")
 
-        b.wait_visible(self.card_button("MDRAID device", "Add disk") + ":disabled")
-        self.check_dropdown_action_disabled(self.card_row("MDRAID device", name=disk1), "Remove", "The MDRAID device must be running")
+            b.wait_visible(self.card_button("MDRAID device", "Add disk") + ":disabled")
+            self.check_dropdown_action_disabled(self.card_row("MDRAID device", name=disk1), "Remove", "The MDRAID device must be running")
 
-        self.raid_default_action("Start")
-        b.wait_text(self.card_desc("MDRAID device", "State"), "Running")
+            self.raid_default_action("Start")
+            b.wait_text(self.card_desc("MDRAID device", "State"), "Running")
 
         # With a running array, we can add spares, but not remove "in-sync" disks
         b.wait_not_present(self.card_button("MDRAID device", "Add disk") + ":disabled")
@@ -315,7 +324,7 @@ class TestStorageMdRaid(storagelib.StorageCase):
 
         # A failed disk can be removed
         dev = b.text(self.card_desc("MDRAID device", "Device"))
-        m.execute(f"mdadm --quiet {dev} --fail /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_DISK3")
+        m.execute(f"mdadm --quiet {dev} --fail {disk3}")
         self.wait_states({disk3: "Failed"})
         self.raid_remove_disk(disk3)
         b.wait_not_present(self.card_row("MDRAID device", name=disk3))
@@ -345,25 +354,24 @@ class TestStorageMdRaid(storagelib.StorageCase):
 
         m.execute(f"mdadm --create md0 --level=1 --assume-clean --run --raid-devices=2 {dev1} {dev2}")
         m.execute("udevadm trigger")
+        self.addCleanup(m.execute, "echo /dev/md/* | xargs mdadm --stop $d")
 
         self.click_card_row("Storage", name="/dev/md/md0")
 
         self.wait_states({dev1: "In sync",
                           dev2: "In sync"})
 
-        # There should be a bitmap, and cockpit should not complain
+        if "Consistency Policy : bitmap" in m.execute("mdadm --misc -D /dev/md/md0"):
+            # Earlier versions of mdadm automatically add a bitmap for
+            # large arrays. Check that Cockpit doesn't complain and
+            # then remove the bitmap to provoke the alert.
+            b.wait_not_present('.pf-v6-c-alert:contains("This MDRAID device has no write-intent bitmap")')
+            m.execute("mdadm --grow --bitmap=none /dev/md/md0; udevadm trigger /dev/md/md0")
 
-        self.assertIn("Consistency Policy : bitmap", m.execute("mdadm --misc -D /dev/md/md0"))
-        b.wait_not_present('.pf-v5-c-alert:contains("This MDRAID device has no write-intent bitmap")')
-
-        # Remove the bitmap, Cockpit should complain and let us put it back.
-
-        m.execute("mdadm --grow --bitmap=none /dev/md/md0; udevadm trigger /dev/md/md0")
         self.assertNotIn("bitmap", m.execute("mdadm --misc -D /dev/md/md0"))
-
-        b.wait_visible('.pf-v5-c-alert:contains("This MDRAID device has no write-intent bitmap")')
+        b.wait_visible('.pf-v6-c-alert:contains("This MDRAID device has no write-intent bitmap")')
         b.click('button:contains("Add a bitmap")')
-        b.wait_not_present('.pf-v5-c-alert:contains("This MDRAID device has no write-intent bitmap")')
+        b.wait_not_present('.pf-v6-c-alert:contains("This MDRAID device has no write-intent bitmap")')
         self.assertIn("Consistency Policy : bitmap", m.execute("mdadm --misc -D /dev/md/md0"))
 
         # Delete the device and create a new one with a journal
@@ -383,10 +391,10 @@ class TestStorageMdRaid(storagelib.StorageCase):
                           dev3: "In sync",
                           dev4: "Unknown (journal)"})
 
-        # There should be no bitmap, and cockpit should not complain
+        # There should be no bitmap (regardless of mdadm version), and cockpit should not complain
 
         self.assertNotIn("bitmap", m.execute("mdadm --misc -D /dev/md/md1"))
-        b.wait_not_present('.pf-v5-c-alert:contains("This MDRAID device has no write-intent bitmap")')
+        b.wait_not_present('.pf-v6-c-alert:contains("This MDRAID device has no write-intent bitmap")')
 
 
 if __name__ == '__main__':

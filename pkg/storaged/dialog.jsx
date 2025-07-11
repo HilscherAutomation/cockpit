@@ -225,7 +225,6 @@ import { DataList, DataListCell, DataListCheck, DataListItem, DataListItemCells,
 import { Form, FormGroup } from "@patternfly/react-core/dist/esm/components/Form/index.js";
 import { Grid, GridItem } from "@patternfly/react-core/dist/esm/layouts/Grid/index.js";
 import { Radio } from "@patternfly/react-core/dist/esm/components/Radio/index.js";
-import { Select as TypeAheadSelect, SelectOption } from "@patternfly/react-core/dist/esm/deprecated/components/Select/index.js";
 import { Slider } from "@patternfly/react-core/dist/esm/components/Slider/index.js";
 import { Spinner } from "@patternfly/react-core/dist/esm/components/Spinner/index.js";
 import { Split } from "@patternfly/react-core/dist/esm/layouts/Split/index.js";
@@ -237,13 +236,14 @@ import { ExclamationTriangleIcon, InfoIcon, HelpIcon, EyeIcon, EyeSlashIcon } fr
 import { InputGroup } from "@patternfly/react-core/dist/esm/components/InputGroup/index.js";
 import { Table, Tbody, Tr, Td } from '@patternfly/react-table';
 
+import { TypeaheadSelect } from "cockpit-components-typeahead-select";
 import { show_modal_dialog, apply_modal_dialog } from "cockpit-components-dialog.jsx";
 import { ListingTable } from "cockpit-components-table.jsx";
 import { FormHelper } from "cockpit-components-form-helper";
 
 import {
     decode_filename, fmt_size, block_name, format_size_and_text, format_delay, for_each_async, get_byte_units,
-    is_available_block
+    BTRFS_TOOL_MOUNT_PATH
 } from "./utils.js";
 import { fmt_to_fragments } from "utils.jsx";
 import client from "./client.js";
@@ -261,8 +261,8 @@ function is_visible(field, values) {
     return !field.options || field.options.visible == undefined || field.options.visible(values);
 }
 
-const Row = ({ field, values, errors, onChange }) => {
-    const { tag, title, options } = field;
+const Field = ({ field, values, errors, onChange }) => {
+    const { tag, options } = field;
 
     if (!is_visible(field, values))
         return null;
@@ -276,10 +276,31 @@ const Row = ({ field, values, errors, onChange }) => {
         onChange(tag);
     }
 
-    const field_elts = field.render(values[tag], change, validated, error);
-    const nested_elts = (options && options.nested_fields
-        ? make_rows(options.nested_fields, values, errors, onChange)
-        : []);
+    return (
+        <>
+            {field.render(values[tag], change, validated, error)}
+            <FormHelper helperText={explanation} helperTextInvalid={validated && error} />
+        </>);
+};
+
+const Row = ({ field, values, errors, onChange }) => {
+    const { title, options } = field;
+
+    if (!is_visible(field, values))
+        return null;
+
+    const field_elts = <Field field={field} values={values} errors={errors} onChange={onChange} />;
+    let nested_elts = [];
+    if (options && options.nested_fields) {
+        if (field.is_group)
+            nested_elts = options.nested_fields.map(f => <Field key={f.tag}
+                                                                field={f}
+                                                                values={values}
+                                                                errors={errors}
+                                                                onChange={onChange} />);
+        else
+            nested_elts = make_rows(options.nested_fields, values, errors, onChange);
+    }
 
     if (title || title == "") {
         let titleLabel = title;
@@ -295,15 +316,13 @@ const Row = ({ field, values, errors, onChange }) => {
             <FormGroup label={titleLabel} hasNoPaddingTop={field.hasNoPaddingTop}>
                 { field_elts }
                 { nested_elts }
-                <FormHelper helperText={explanation} helperTextInvalid={validated && error} />
             </FormGroup>
         );
     } else if (!field.bare) {
         return (
-            <FormGroup validated={validated} hasNoPaddingTop={field.hasNoPaddingTop}>
+            <FormGroup hasNoPaddingTop={field.hasNoPaddingTop}>
                 { field_elts }
                 { nested_elts }
-                <FormHelper helperText={explanation} helperTextInvalid={validated && error} />
             </FormGroup>
         );
     } else
@@ -401,11 +420,11 @@ export const dialog_open = (def) => {
     function run_action(progress_callback, variant) {
         const func = () => {
             return validate(variant)
-                    .then(() => {
+                    .then(validated_values => {
                         const visible_values = { variant };
                         fields.forEach(f => {
                             if (is_visible(f, values))
-                                visible_values[f.tag] = values[f.tag];
+                                visible_values[f.tag] = validated_values[f.tag];
                         });
                         if (def.Action.wrapper)
                             return def.Action.wrapper(visible_values, progress_callback,
@@ -487,9 +506,24 @@ export const dialog_open = (def) => {
     };
 
     const validate = (variant) => {
+        // The validation functions sometimes change the dialog values
+        // for the benefit of the action functions. For example, a
+        // SizeSlider will convert from "text plus unit" to a numeric
+        // value during validation.
+        //
+        // However, if the action fails, we don't want the values in
+        // the dialog to change.  The SizeSlider would convert back
+        // from a numeric value to "text plus unit", for example, and
+        // that conversion might change what the user had type.
+        //
+        // So we make a copy of the dialog state and let the validate
+        // and action functions work with that.
+        //
+        const validated_values = { ...values };
+
         return Promise.all(fields.map(f => {
             if (is_visible(f, values) && f.options && f.options.validate)
-                return f.options.validate(values[f.tag], values, variant);
+                return f.options.validate(validated_values[f.tag], validated_values, variant);
             else
                 return null;
         })).then(results => {
@@ -497,6 +531,7 @@ export const dialog_open = (def) => {
             fields.forEach((f, i) => { if (results[i]) errors[f.tag] = results[i]; });
             if (Object.keys(errors).length > 0)
                 return Promise.reject(errors);
+            return validated_values;
         });
     };
 
@@ -650,24 +685,17 @@ export const PassInput = (tag, title, options) => {
     };
 };
 
-const TypeAheadSelectElement = ({ options, change }) => {
-    const [isOpen, setIsOpen] = useState(false);
-    const [value, setValue] = useState(options.value);
-
+const TypeAheadSelectElement = ({ value, options, change }) => {
     return (
-        <TypeAheadSelect
-            variant="typeahead"
-            isCreatable
-            createText={_("Use")}
-            id="nfs-path-on-server"
-            isOpen={isOpen}
-            selections={value}
-            onToggle={(_event, isOpen) => setIsOpen(isOpen)}
-            onSelect={(event, value) => { setValue(value); change(value) }}
-            onClear={() => setValue(false)}
-            isDisabled={options.disabled}>
-            {options.choices.map(entry => <SelectOption key={entry} value={entry} />)}
-        </TypeAheadSelect>
+        <TypeaheadSelect toggleProps={ { id: "nfs-path-on-server" } }
+                         isScrollable
+                         isCreatable
+                         createOptionMessage={val => cockpit.format(_("Use $0"), val)}
+                         selected={value}
+                         onSelect={(_, value) => change(value)}
+                         onClearSelection={() => change("")}
+                         isDisabled={options.disabled}
+                         selectOptions={options.choices.map(entry => ({ value: entry, content: entry }))} />
     );
 };
 
@@ -679,9 +707,11 @@ export const ComboBox = (tag, title, options) => {
         initial_value: options.value || "",
 
         render: (val, change, validated) => {
-            return <div data-field={tag} data-field-type="combobox">
-                <TypeAheadSelectElement options={options} change={change} />
-            </div>;
+            return (
+                <div data-field={tag} data-field-type="combobox">
+                    <TypeAheadSelectElement value={val} options={options} change={change} />
+                </div>
+            );
         }
     };
 };
@@ -860,8 +890,8 @@ export const SelectSpace = (tag, title, options) => {
                         return (
                             <DataListItem key={spc.block ? spc.block.Device : spc.desc}>
                                 <DataListItemRow>
-                                    <div className="pf-v5-c-data-list__item-control">
-                                        <div className="pf-v5-c-data-list__check">
+                                    <div className="pf-v6-c-data-list__item-control">
+                                        <div className="pf-v6-c-data-list__check">
                                             <input type='radio' value={desc} name='space' checked={val == spc} onChange={on_change} />
                                         </div>
                                     </div>
@@ -1024,7 +1054,8 @@ class SizeSliderElement extends React.Component {
             onChange({ text: value, unit });
         };
 
-        let slider_val, text_val;
+        let slider_val;
+        let text_val;
         if (val.text && val.unit) {
             slider_val = Number(val.text) * val.unit;
             text_val = val.text;
@@ -1037,7 +1068,7 @@ class SizeSliderElement extends React.Component {
             if (val.unit)
                 onChange({ text: val.text, unit: Number(u) });
             else
-                onChange(val / unit * Number(u));
+                onChange(size_slider_round(val / unit * Number(u), round));
             this.setState({ unit: Number(u) });
         };
 
@@ -1132,6 +1163,18 @@ export const SizeSlider = (tag, title, options) => {
                 </div>
             );
         }
+    };
+};
+
+export const Group = (title, fields) => {
+    return {
+        tag: null,
+        title,
+        is_group: true,
+        hasNoPaddingTop: true,
+        options: { nested_fields: fields },
+
+        render: (val, change) => null,
     };
 };
 
@@ -1245,6 +1288,14 @@ export const TeardownMessage = (usage, expect_single_unmount) => {
         if (use.block) {
             const name = teardown_block_name(use);
             let location = use.location;
+
+            /* Don't show mount points used internally by Cockpit.
+             * It's fine to tear them down, but we don't want people
+             * to start worrying about them.
+             */
+            if (location && location.startsWith(BTRFS_TOOL_MOUNT_PATH))
+                return;
+
             if (use.usage == "mounted") {
                 location = client.strip_mount_point_prefix(location);
                 if (location === false)
@@ -1256,12 +1307,15 @@ export const TeardownMessage = (usage, expect_single_unmount) => {
                     use.actions.length ? use.actions.join(", ") : "-",
                     {
                         title: <UsersPopover users={use.users || []} />,
-                        props: { className: "pf-v5-u-text-align-right" }
+                        props: { className: "pf-v6-u-text-align-right" }
                     }
                 ]
             });
         }
     });
+
+    if (rows.length == 0)
+        return null;
 
     return (
         <div className="modal-footer-teardown">
@@ -1287,7 +1341,7 @@ const AnacondaTeardownMessage = ({ usage }) => {
 
             rows.push(
                 <Tr key={index}>
-                    <Td className="pf-v5-u-font-weight-bold">{name}</Td>
+                    <Td className="pf-v6-u-font-weight-bold">{name}</Td>
                     <Td>{location}</Td>
                     <Td>{use.data_warning}</Td>
                 </Tr>);
@@ -1353,8 +1407,7 @@ export function init_teardown_usage(client, usage, expect_single_unmount) {
                     } else if (u.block.IdUsage == "crypto" && !client.blocks_cleartext[u.block.path]) {
                         u.data_warning = _("Locked encrypted device might contain data");
                     } else if (!client.blocks_ptable[u.block.path] &&
-                               u.block.IdUsage != "raid" &&
-                               !is_available_block(client, u.block)) {
+                               u.block.IdUsage && u.block.IdUsage != "raid") {
                         u.data_warning = _("Device contains unrecognized data");
                     }
                     if (u.data_warning)
@@ -1385,7 +1438,7 @@ export const StopProcessesMessage = ({ mount_point, users }) => {
         return {
             columns: [
                 u.pid,
-                { title: u.cmd.substr(0, 100), props: { modifier: "breakWord" } },
+                { title: u.cmd.substring(0, 100), props: { modifier: "breakWord" } },
                 u.user || "-",
                 { title: format_delay(-u.since * 1000), props: { modifier: "nowrap" } }
             ]
@@ -1396,7 +1449,7 @@ export const StopProcessesMessage = ({ mount_point, users }) => {
         return {
             columns: [
                 { title: u.unit.replace(/\.service$/, ""), props: { modifier: "breakWord" } },
-                { title: u.cmd.substr(0, 100), props: { modifier: "breakWord" } },
+                { title: u.cmd.substring(0, 100), props: { modifier: "breakWord" } },
                 { title: u.desc || "", props: { modifier: "breakWord" } },
                 { title: format_delay(-u.since * 1000), props: { modifier: "nowrap" } }
             ]

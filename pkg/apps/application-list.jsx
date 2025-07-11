@@ -21,10 +21,9 @@ import cockpit from "cockpit";
 import React, { useState } from "react";
 import { Alert, AlertActionCloseButton, AlertActionLink } from "@patternfly/react-core/dist/esm/components/Alert/index.js";
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
-import { Card } from "@patternfly/react-core/dist/esm/components/Card/index.js";
 import { DataList, DataListAction, DataListCell, DataListItem, DataListItemCells, DataListItemRow } from "@patternfly/react-core/dist/esm/components/DataList/index.js";
 import { Flex, FlexItem } from "@patternfly/react-core/dist/esm/layouts/Flex/index.js";
-import { Page, PageSection, PageSectionVariants } from "@patternfly/react-core/dist/esm/components/Page/index.js";
+import { Page, PageSection } from "@patternfly/react-core/dist/esm/components/Page/index.js";
 import { Stack, StackItem } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
 
 import { RebootingIcon } from "@patternfly/react-icons";
@@ -36,7 +35,7 @@ import { EmptyStatePanel } from "cockpit-components-empty-state.jsx";
 import { useInit } from "hooks";
 
 import * as PackageKit from "./packagekit.js";
-import { icon_url, show_error, launch, ProgressBar, CancelButton } from "./utils.jsx";
+import { icon_url, show_error, launch, ProgressBar, CancelButton } from "./utils";
 import { ActionButton } from "./application.jsx";
 
 const _ = cockpit.gettext;
@@ -56,7 +55,7 @@ const ApplicationRow = ({ comp, progress, progress_title, action }) => {
         summary_or_progress = (
             <Flex spaceItems={{ default: 'spaceItemsSm' }} alignItems={{ default: 'alignItemsCenter' }}>
                 <span id={comp.name + "-progress"} className="progress-title-span">{progress_title}</span>
-                <ProgressBar title={progress_title} data={progress} ariaLabelledBy={comp.name + "-progress"} />
+                <ProgressBar data={progress} ariaLabelledBy={comp.name + "-progress"} />
             </Flex>);
     } else {
         if (error) {
@@ -79,7 +78,7 @@ const ApplicationRow = ({ comp, progress, progress_title, action }) => {
                 <DataListItemCells
                     dataListCells={[
                         <DataListCell isIcon key="icon">
-                            <img src={icon_url(comp.icon)} role="presentation" alt="" />
+                            <img src={icon_url(comp.icon)} alt="" />
                         </DataListCell>,
                         <DataListCell width={1} key="app name">
                             {name}
@@ -143,9 +142,11 @@ export const ApplicationList = ({ metainfo_db, appProgress, appProgressTitle, ac
         }
     }
 
-    let refresh_progress, refresh_button, tbody;
+    let refresh_progress;
+    let refresh_button;
+    let tbody;
     if (progress) {
-        refresh_progress = <ProgressBar id="refresh-progress" size="sm" title={_("Checking for new applications")} data={progress} />;
+        refresh_progress = <ProgressBar id="refresh-progress" size="sm" data={progress} />;
         refresh_button = <CancelButton data={progress} />;
     } else {
         refresh_progress = null;
@@ -168,10 +169,10 @@ export const ApplicationList = ({ metainfo_db, appProgress, appProgressTitle, ac
         : null;
 
     return (
-        <Page id="list-page" data-packages-checked={dataPackagesInstalled !== null}>
-            <PageSection variant={PageSectionVariants.light}>
+        <Page id="list-page" data-packages-checked={dataPackagesInstalled !== null} className='no-masthead-sidebar'>
+            <PageSection hasBodyWrapper={false}>
                 <Flex alignItems={{ default: 'alignItemsCenter' }}>
-                    <h2 className="pf-v5-u-font-size-3xl">{_("Applications")}</h2>
+                    <h2 className="pf-v6-u-font-size-3xl">{_("Applications")}</h2>
                     <FlexItem align={{ default: 'alignRight' }}>
                         <Flex alignItems={{ default: 'alignItemsCenter' }} spacer={{ default: 'spacerXs' }}>
                             <FlexItem>
@@ -188,7 +189,7 @@ export const ApplicationList = ({ metainfo_db, appProgress, appProgressTitle, ac
                 ? <EmptyStatePanel title={ _("No applications installed or available.") }
                                    paragraph={data_missing_msg}
                                    action={ data_missing_msg && _("Install application information")} onAction={refresh} />
-                : <PageSection>
+                : <PageSection hasBodyWrapper={false}>
                     <Stack hasGutter>
                         {!progress && data_missing_msg &&
                             <StackItem key="missing-meta-alert">
@@ -197,11 +198,9 @@ export const ApplicationList = ({ metainfo_db, appProgress, appProgressTitle, ac
                             </StackItem>
                         }
                         <StackItem>
-                            <Card>
-                                <DataList aria-label={_("Applications list")}>
-                                    { tbody }
-                                </DataList>
-                            </Card>
+                            <DataList aria-label={_("Applications list")}>
+                                { tbody }
+                            </DataList>
                         </StackItem>
                     </Stack>
                 </PageSection>

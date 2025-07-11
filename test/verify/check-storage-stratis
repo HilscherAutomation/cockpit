@@ -25,6 +25,12 @@ import testlib
 
 PV_SIZE = 4000  # 4 GB in MB
 
+# List of images that support Stratis and create V1 pools by
+# default. When this gets empty, Cockpit itself can be cleaned up to
+# drop support for Stratis API revisions before "r8".
+#
+V1_POOL_IMAGES = ["rhel-9-7", "centos-9-bootc", "centos-9"]
+
 
 def get_stratis_stop_type_opt(execute):
     """Get `stratis stop pool` required option for a pool name
@@ -46,7 +52,14 @@ def create_pool_key(machine, keyname, passphrase):
     machine.execute(f"echo -n '{passphrase}' | stratis key set --keyfile-path /dev/stdin {keyname}")
 
 
-@testlib.skipImage("No Stratis", "debian-*", "ubuntu-*")
+def create_legacy_pool(machine, disks, name="pool0", keydesc=None, tang=None):
+    keydesc_opt = "--key-desc " + keydesc if keydesc else ""
+    clevis_opt = "--clevis tang --trust-url --tang-url " + tang if tang else ""
+    machine.execute(f"yes | stratisd-tools stratis-legacy-pool {keydesc_opt} {clevis_opt} {name} {' '.join(disks)}")
+
+
+@testlib.skipImage("No Stratis", "debian-*", "ubuntu-*", "arch")
+@testlib.skipImage("commit 817c957899a4 removed Statis 2 support", "rhel-8-*")
 @testlib.nondestructive
 class TestStorageStratis(storagelib.StorageCase):
     def setUp(self):
@@ -67,7 +80,7 @@ class TestStorageStratis(storagelib.StorageCase):
         self.addCleanup(exe,
                         "mount | grep mapper/stratis | awk '{print $1}' | xargs --no-run-if-empty umount")
 
-    def testBasic(self):
+    def testBasic(self, legacy=False):
         m = self.machine
         b = self.browser
 
@@ -87,14 +100,17 @@ class TestStorageStratis(storagelib.StorageCase):
         b.wait_visible(self.card_row("Storage", name=dev_5))
 
         # Create a pool
-        self.dialog_open_with_retry(trigger=lambda: self.click_devices_dropdown("Create Stratis pool"),
-                                    expect=lambda: (self.dialog_is_present('disks', dev_1) and
-                                                    self.dialog_is_present('disks', dev_2) and
-                                                    self.dialog_check({"name": "pool0"})))
-        self.dialog_set_val("disks", {dev_1: True, dev_2: True})
-        b.assert_pixels("#dialog", "create-pool")
-        self.dialog_apply()
-        self.dialog_wait_close()
+        if not legacy:
+            self.dialog_open_with_retry(trigger=lambda: self.click_devices_dropdown("Create Stratis pool"),
+                                        expect=lambda: (self.dialog_is_present('disks', dev_1) and
+                                                        self.dialog_is_present('disks', dev_2) and
+                                                        self.dialog_check({"name": "pool0"})))
+            self.dialog_set_val("disks", {dev_1: True, dev_2: True})
+            b.assert_pixels("#dialog", "create-pool")
+            self.dialog_apply()
+            self.dialog_wait_close()
+        else:
+            create_legacy_pool(m, disks=[dev_1, dev_2])
 
         b.wait_visible(self.card_row("Storage", name="pool0"))
         b.wait_not_present(self.card_row("Storage", name="pool0") + " .ct-icon-exclamation-triangle")
@@ -107,18 +123,17 @@ class TestStorageStratis(storagelib.StorageCase):
         self.dialog_wait_close()
 
         # Stop the pool
-        pool_uuid = m.execute("stratis --unhyphenated-uuids pool list --name pool0 | grep ^UUID | cut -d' ' -f2").strip()
         m.execute(f"stratis pool stop {self.stop_type_opt} pool0")
-        b.wait_in_text(self.card_row("Storage", name=pool_uuid), "Stratis pool")
+        b.wait_in_text(self.card_row("Storage", name="pool0"), "Stratis pool (stopped)")
 
         # Start it
-        self.click_dropdown(self.card_row("Storage", name=pool_uuid), "Start")
-        b.wait_visible(self.card_row("Storage", name="pool0"))
+        self.click_dropdown(self.card_row("Storage", name="pool0"), "Start")
+        b.wait_in_text(self.card_row("Storage", name="pool0"), "Stratis filesystems")
 
         self.click_card_row("Storage", name="pool0")
         b.wait_text(self.card_desc("Stratis pool", "Name"), "pool0")
         b.wait_in_text(self.card_desc("Stratis pool", "Usage"), "8 GB")
-        b.wait_not_present('.pf-v5-c-alert')
+        b.wait_not_present('.pf-v6-c-alert')
 
         udisk_contains_stratis_private = "physical-originsub" in m.execute("udisksctl dump")
 
@@ -127,10 +142,11 @@ class TestStorageStratis(storagelib.StorageCase):
         self.dialog_wait_open()
         self.dialog_set_val('name', 'fsys1')
         self.dialog_set_val('mount_point', '/run/fsys1')
-        b.assert_pixels("#dialog", "create-fsys")
+        if not legacy:
+            b.assert_pixels("#dialog", "create-fsys")
         self.dialog_apply()
         self.dialog_wait_close()
-        self.addCleanup(m.execute, "umount /run/fsys1 || true")
+        self.addCleanupMount("/run/fsys1")
 
         b.wait_text(self.card_row_col("Stratis filesystems", 1, 1), "fsys1")
         b.wait_text(self.card_row_col("Stratis filesystems", 1, 3), "/run/fsys1")
@@ -141,10 +157,11 @@ class TestStorageStratis(storagelib.StorageCase):
         b.click(self.card_button("Stratis filesystems", "Create new filesystem"))
         self.dialog({'name': 'fsys2',
                      'mount_point': '/run/fsys2'})
-        self.addCleanup(m.execute, "umount /run/fsys2 || true")
+        self.addCleanupMount("/run/fsys2")
         b.wait_text(self.card_row_col("Stratis filesystems", 2, 1), "fsys2")
         b.wait_text(self.card_row_col("Stratis filesystems", 2, 3), "/run/fsys2")
-        b.assert_pixels(self.card("Stratis filesystems"), "fsys-rows")
+        if not legacy:
+            b.assert_pixels(self.card("Stratis filesystems"), "fsys-rows")
         self.assertEqual(self.inode(m.execute("findmnt -n -o SOURCE /run/fsys2").strip()),
                          self.inode("/dev/stratis/pool0/fsys2"))
         m.write("/run/fsys2/FILE", "Hello Stratis!")
@@ -165,7 +182,8 @@ class TestStorageStratis(storagelib.StorageCase):
         self.click_card_row("Stratis filesystems", 1)
         self.click_card_dropdown("Stratis filesystem", "Delete")
         self.dialog_wait_open()
-        b.assert_pixels("#dialog", "delete-fsys")
+        if not legacy:
+            b.assert_pixels("#dialog", "delete-fsys")
         self.dialog_apply()
         self.dialog_wait_close()
         b.wait_visible(self.card("Stratis filesystems"))
@@ -185,7 +203,8 @@ class TestStorageStratis(storagelib.StorageCase):
         self.dialog_set_val('name', 'fsys2-copy')
         self.dialog_set_val('mount_point', '/run/fsys2-copy')
         self.dialog_set_val('at_boot', 'never')
-        b.assert_pixels("#dialog", "copy-fsys")
+        if not legacy:
+            b.assert_pixels("#dialog", "copy-fsys")
         self.dialog_apply()
         self.dialog_wait_close()
         b.wait_text(self.card_row_col("Stratis filesystems", 2, 1), "fsys2-copy")
@@ -240,7 +259,8 @@ class TestStorageStratis(storagelib.StorageCase):
         self.dialog_apply()
         self.dialog_wait_error("disks", "At least one")
         self.dialog_set_val('disks', {dev_3: True})
-        b.assert_pixels("#dialog", "add-disk")
+        if not legacy:
+            b.assert_pixels("#dialog", "add-disk")
         self.dialog_apply()
         self.dialog_wait_close()
 
@@ -276,7 +296,8 @@ class TestStorageStratis(storagelib.StorageCase):
         # Destroy the pool
         self.click_card_dropdown("Stratis pool", "Delete")
         self.dialog_wait_open()
-        b.assert_pixels('#dialog', "delete-pool")
+        if not legacy:
+            b.assert_pixels('#dialog', "delete-pool")
         self.dialog_apply()
         self.dialog_wait_close()
         b.wait_visible(self.card("Storage"))
@@ -293,9 +314,13 @@ class TestStorageStratis(storagelib.StorageCase):
         m.execute("! findmnt /run/fsys3")
 
         # https://bugzilla.redhat.com/show_bug.cgi?id=2183084
-        # Do this assersion in the end so that the previous checks still run.
+        # Do this assertion in the end so that the previous checks still run.
         # After the stratis pool is deleted we can't check this, so use the value from earlier.
         self.assertFalse(udisk_contains_stratis_private)
+
+    @testlib.skipImage("Stratis too old for legacy tests", *V1_POOL_IMAGES)
+    def testBasicLegacy(self):
+        self.testBasic(legacy=True)
 
     @testlib.skipImage("Stratis too old", "rhel-8-*")
     def testAlerts(self):
@@ -309,16 +334,22 @@ class TestStorageStratis(storagelib.StorageCase):
         b.wait_visible(self.card_row("Storage", name=dev_1))
         b.wait_visible(self.card_row("Storage", name=dev_2))
 
-        # Create an encrypted pool with two block devices
-        self.click_devices_dropdown("Create Stratis pool")
-        self.dialog_wait_open()
-        self.dialog_set_val("encrypt_pass.on", val=True)
-        self.dialog_set_val("passphrase", "foodeeboodeebar")
-        self.dialog_set_val("passphrase2", "foodeeboodeebar")
-        self.dialog_set_val("disks", {dev_1: True})
-        self.dialog_set_val("disks", {dev_2: True})
-        self.dialog_apply()
-        self.dialog_wait_close()
+        # Create an encrypted V1 pool with two block devices
+
+        if m.image not in V1_POOL_IMAGES:
+            create_pool_key(m, "pool0", "foodeeboodeebar")
+            create_legacy_pool(m, disks=[dev_1, dev_2], keydesc="pool0")
+            m.execute("stratis key unset pool0")
+        else:
+            self.click_devices_dropdown("Create Stratis pool")
+            self.dialog_wait_open()
+            self.dialog_set_val("encrypt_pass.on", val=True)
+            self.dialog_set_val("passphrase", "foodeeboodeebar")
+            self.dialog_set_val("passphrase2", "foodeeboodeebar")
+            self.dialog_set_val("disks", {dev_1: True})
+            self.dialog_set_val("disks", {dev_2: True})
+            self.dialog_apply()
+            self.dialog_wait_close()
 
         b.wait_visible(self.card_row("Storage", name="pool0"))
         b.wait_not_present(self.card_row("Storage", name="pool0") + " .ct-icon-exclamation-triangle")
@@ -326,7 +357,7 @@ class TestStorageStratis(storagelib.StorageCase):
         # Check that there is no alert on the details page
         self.click_card_row("Storage", name="pool0")
         b.wait_visible(self.card("Encrypted Stratis pool"))
-        b.wait_not_present('.pf-v5-c-alert')
+        b.wait_not_present('.pf-v6-c-alert')
 
         m.execute(f"""
 JSON=$(sudo cryptsetup token export --token-id=1 {dev_1} \
@@ -340,7 +371,7 @@ systemctl restart stratisd
         b.wait_visible(self.card_row("Storage", name="pool0") + " .ct-icon-exclamation-triangle")
 
         self.click_card_row("Storage", name="pool0")
-        b.wait_visible('.pf-v5-c-alert:contains("This pool is in a degraded state")')
+        b.wait_visible('.pf-v6-c-alert:contains("This pool is in a degraded state")')
 
         b.click(self.card_button("Stratis filesystems", "Create new filesystem"))
         self.dialog_wait_open()
@@ -406,7 +437,7 @@ systemctl restart stratisd
         b.wait_visible(self.card("Storage"))
         b.wait_not_present(self.card_row("Storage", name="TEST1"))
 
-    def testOverprovisioning(self):
+    def testOverprovisioning(self, legacy=False):
         b = self.browser
 
         self.login_and_go("/storage")
@@ -415,13 +446,18 @@ systemctl restart stratisd
         b.wait_visible(self.card_row("Storage", name=dev_1))
 
         # Create a pool with overprov off
-        self.dialog_with_retry(trigger=lambda: self.click_devices_dropdown("Create Stratis pool"),
-                               expect=lambda: (self.dialog_is_present('disks', dev_1) and
-                                               self.dialog_check({"name": "pool0"})),
-                               values={
-                                   "disks": {dev_1: True},
-                                   "overprov.on": False
-                               })
+        if not legacy:
+            self.dialog_with_retry(trigger=lambda: self.click_devices_dropdown("Create Stratis pool"),
+                                   expect=lambda: (self.dialog_is_present('disks', dev_1) and
+                                                   self.dialog_check({"name": "pool0"})),
+                                   values={
+                                       "disks": {dev_1: True},
+                                       "overprov.on": False
+                                   })
+        else:
+            create_legacy_pool(self.machine, disks=[dev_1])
+            self.machine.execute("stratis pool overprovision pool0 no")
+
         self.click_card_row("Storage", name="pool0")
 
         overprov_toggle = "input[aria-label='Allow overprovisioning']"
@@ -432,7 +468,7 @@ systemctl restart stratisd
 
         b.click(self.card_button("Stratis filesystems", "Create new filesystem"))
         self.dialog_wait_open()
-        self.dialog_wait_val('size_options.custom_size', val=True)
+        self.dialog_wait_val('set_custom_size.enabled', val=True)
         self.dialog_set_val('name', 'fsys1')
         self.dialog_apply_secondary()
         self.dialog_wait_close()
@@ -441,9 +477,8 @@ systemctl restart stratisd
 
         sel = self.card_row("Stratis filesystems", name="fsys1")
         b.click(self.dropdown_toggle(sel))
-        b.wait_visible(self.dropdown_action(sel, "Snapshot") + "[disabled]")
-        b.wait_text(self.dropdown_description(sel, "Snapshot"),
-                    "Not enough free space")
+        b.wait_visible(self.dropdown_action("Snapshot") + "[disabled]")
+        b.wait_text(self.dropdown_description("Snapshot"), "Not enough free space")
         b.click(self.dropdown_toggle(sel))
 
         # Switch overprov on
@@ -463,7 +498,7 @@ systemctl restart stratisd
 
         b.click(self.card_button("Stratis filesystems", "Create new filesystem"))
         self.dialog_wait_open()
-        self.dialog_wait_val('size_options.custom_size', val=False)
+        self.dialog_wait_val('set_custom_size.enabled', val=False)
         self.dialog_cancel()
         self.dialog_wait_close()
 
@@ -481,7 +516,11 @@ systemctl restart stratisd
         b.click(overprov_toggle)
         b.wait_visible(f"{overprov_toggle}:not(:checked)")
 
-    def testFilesystemSizes(self):
+    @testlib.skipImage("Stratis too old for legacy tests", *V1_POOL_IMAGES)
+    def testOverprovisioningLegacy(self):
+        self.testOverprovisioning(legacy=True)
+
+    def testFilesystemSizes(self, legacy=False):
         b = self.browser
 
         self.login_and_go("/storage")
@@ -490,10 +529,14 @@ systemctl restart stratisd
         b.wait_visible(self.card_row("Storage", name=dev_1))
 
         # Create a pool
-        self.dialog_with_retry(trigger=lambda: self.click_devices_dropdown("Create Stratis pool"),
-                               expect=lambda: (self.dialog_is_present('disks', dev_1) and
-                                               self.dialog_check({"name": "pool0"})),
-                               values={"disks": {dev_1: True}})
+        if not legacy:
+            self.dialog_with_retry(trigger=lambda: self.click_devices_dropdown("Create Stratis pool"),
+                                   expect=lambda: (self.dialog_is_present('disks', dev_1) and
+                                                   self.dialog_check({"name": "pool0"})),
+                                   values={"disks": {dev_1: True}})
+        else:
+            create_legacy_pool(self.machine, disks=[dev_1])
+
         self.click_card_row("Storage", name="pool0")
 
         # Create filesystem with initial virtual size and a limit
@@ -501,9 +544,9 @@ systemctl restart stratisd
         b.click(self.card_button("Stratis filesystems", "Create new filesystem"))
         self.dialog_wait_open()
         self.dialog_set_val('name', 'fsys1')
-        self.dialog_set_val('size_options.custom_size', val=True)
+        self.dialog_set_val('set_custom_size.enabled', val=True)
         self.dialog_set_val('size', 800)
-        self.dialog_set_val('size_options.custom_limit', val=True)
+        self.dialog_set_val('set_custom_limit.enabled', val=True)
         self.dialog_set_val('limit', 1600)
         self.dialog_apply_secondary()
         self.dialog_wait_close()
@@ -535,8 +578,13 @@ systemctl restart stratisd
 
         b.wait_text(self.card_desc("Stratis filesystem", "Virtual size limit"), "none")
 
+    @testlib.skipImage("Stratis too old for legacy tests", *V1_POOL_IMAGES)
+    def testFilesystemSizesLegacy(self):
+        self.testFilesystemSizes(legacy=True)
 
-@testlib.skipImage("No Stratis", "debian-*", "ubuntu-*")
+
+@testlib.skipImage("No Stratis", "debian-*", "ubuntu-*", "arch")
+@testlib.skipImage("commit 817c957899a4 removed Statis 2 support", "rhel-8-*")
 class TestStorageStratisReboot(storagelib.StorageCase):
     # LUKS uses memory hard PBKDF, 1 GiB is not enough; see https://bugzilla.redhat.com/show_bug.cgi?id=1881829
     provision = {
@@ -552,7 +600,7 @@ class TestStorageStratisReboot(storagelib.StorageCase):
             exe("systemctl enable --now stratisd")
             self.addCleanup(self.machine.execute, "systemctl disable --now stratisd")
 
-    def testEncrypted(self):
+    def testEncrypted(self, legacy=False):
         m = self.machine
         b = self.browser
 
@@ -577,18 +625,23 @@ class TestStorageStratisReboot(storagelib.StorageCase):
         # we occupy its first choice in order to force Cockpit to use
         # something else.
         create_pool_key(m, "pool0", "not-the-passphrase")
-        self.dialog_open_with_retry(trigger=lambda: self.click_devices_dropdown("Create Stratis pool"),
-                                    expect=lambda: (self.dialog_is_present('disks', dev_1) and
-                                                    self.dialog_check({"name": "pool0"})))
-        self.dialog_set_val("encrypt_pass.on", val=True)
-        self.dialog_set_val("passphrase", passphrase)
-        self.dialog_set_val("passphrase2", passphrase)
-        self.dialog_set_val("disks", {dev_1: True})
-        b.assert_pixels("#dialog", "create-encrypted-pool",
-                        # The small checkbox ticks render inconsistently
-                        ignore=["input[type=checkbox]"])
-        self.dialog_apply()
-        self.dialog_wait_close()
+        if not legacy:
+            self.dialog_open_with_retry(trigger=lambda: self.click_devices_dropdown("Create Stratis pool"),
+                                        expect=lambda: (self.dialog_is_present('disks', dev_1) and
+                                                        self.dialog_check({"name": "pool0"})))
+            self.dialog_set_val("encrypt_pass.on", val=True)
+            self.dialog_set_val("passphrase", passphrase)
+            self.dialog_set_val("passphrase2", passphrase)
+            self.dialog_set_val("disks", {dev_1: True})
+            b.assert_pixels("#dialog", "create-encrypted-pool",
+                            # The small checkbox ticks render inconsistently
+                            ignore=["input[type=checkbox]"])
+            self.dialog_apply()
+            self.dialog_wait_close()
+        else:
+            create_pool_key(m, "pool0.1", passphrase)
+            create_legacy_pool(m, disks=[dev_1], keydesc="pool0.1")
+            m.execute("stratis key unset pool0.1")
         m.execute("stratis key unset pool0")
 
         self.click_card_row("Storage", name="pool0")
@@ -639,7 +692,7 @@ class TestStorageStratisReboot(storagelib.StorageCase):
         self.dialog_wait_close()
         b.wait_in_text(self.card_row("Encrypted Stratis pool", name=dev_3), "cache")
 
-        m.reboot()
+        self.reboot()
         m.start_cockpit()
         b.relogin()
         b.enter_page("/storage")
@@ -654,7 +707,7 @@ class TestStorageStratisReboot(storagelib.StorageCase):
         self.dialog_set_val('passphrase', "wrong-passphrase")
         self.dialog_apply()
         with b.wait_timeout(60):
-            b.wait_visible("#dialog .pf-v5-c-alert.pf-m-danger")
+            b.wait_visible("#dialog .pf-v6-c-alert.pf-m-danger")
         self.dialog_set_val('passphrase', passphrase)
         self.dialog_apply()
         self.dialog_wait_close()
@@ -668,7 +721,7 @@ class TestStorageStratisReboot(storagelib.StorageCase):
 
         # Reboot (this requires the passphrase)
         self.setup_systemd_password_agent(passphrase)
-        m.reboot()
+        self.reboot()
         m.start_cockpit()
         b.relogin()
         b.enter_page("/storage")
@@ -686,7 +739,11 @@ class TestStorageStratisReboot(storagelib.StorageCase):
         # Check that the entry has disappeared from fstab
         self.assertEqual(m.execute("grep /run/fsys1 /etc/fstab || true"), "")
 
-    def testReboot(self):
+    @testlib.skipImage("Stratis too old for legacy tests", *V1_POOL_IMAGES)
+    def testEncryptedLegacy(self):
+        self.testEncrypted(legacy=True)
+
+    def testReboot(self, legacy=False):
         m = self.machine
         b = self.browser
 
@@ -697,10 +754,13 @@ class TestStorageStratisReboot(storagelib.StorageCase):
         b.wait_visible(self.card_row("Storage", name=dev_1))
 
         # Create a pool
-        self.dialog_with_retry(trigger=lambda: self.click_devices_dropdown("Create Stratis pool"),
-                               expect=lambda: (self.dialog_is_present('disks', dev_1) and
-                                               self.dialog_check({"name": "pool0"})),
-                               values={"disks": {dev_1: True}})
+        if not legacy:
+            self.dialog_with_retry(trigger=lambda: self.click_devices_dropdown("Create Stratis pool"),
+                                   expect=lambda: (self.dialog_is_present('disks', dev_1) and
+                                                   self.dialog_check({"name": "pool0"})),
+                                   values={"disks": {dev_1: True}})
+        else:
+            create_legacy_pool(m, disks=[dev_1])
         self.click_card_row("Storage", name="pool0")
 
         # Create a filesystems
@@ -710,7 +770,7 @@ class TestStorageStratisReboot(storagelib.StorageCase):
         b.wait_text(self.card_row_col("Stratis filesystems", 1, 1), "fsys1")
         b.wait_text(self.card_row_col("Stratis filesystems", 1, 3), "/run/fsys1")
 
-        m.reboot()
+        self.reboot()
         m.start_cockpit()
         b.relogin()
         b.enter_page("/storage")
@@ -718,6 +778,10 @@ class TestStorageStratisReboot(storagelib.StorageCase):
         # Filesystem should be mounted now
         b.wait_text(self.card_row_col("Stratis filesystems", 1, 1), "fsys1")
         b.wait_text(self.card_row_col("Stratis filesystems", 1, 3), "/run/fsys1")
+
+    @testlib.skipImage("Stratis too old for legacy tests", *V1_POOL_IMAGES)
+    def testRebootLegacy(self):
+        self.testReboot(legacy=True)
 
     def testAtBoot(self):
         m = self.machine
@@ -770,7 +834,7 @@ class TestStorageStratisReboot(storagelib.StorageCase):
         destroy()
 
     @testlib.skipImage("Stratis too old", "rhel-8-*")
-    def testPoolResize(self):
+    def testPoolResize(self, legacy=False):
         m = self.machine
         b = self.browser
 
@@ -785,9 +849,13 @@ class TestStorageStratisReboot(storagelib.StorageCase):
         b.wait_visible(self.card_row("Storage", name="lvol0"))
 
         # Create a pool
-        self.dialog_with_retry(trigger=lambda: self.click_devices_dropdown("Create Stratis pool"),
-                               expect=lambda: self.dialog_is_present('disks', "lvol0"),
-                               values={"disks": {"lvol0": True}})
+        if not legacy:
+            self.dialog_with_retry(trigger=lambda: self.click_devices_dropdown("Create Stratis pool"),
+                                   expect=lambda: self.dialog_is_present('disks', "lvol0"),
+                                   values={"disks": {"lvol0": True}})
+        else:
+            create_legacy_pool(m, disks=["/dev/vgroup0/lvol0"])
+
         b.wait_in_text(self.card_row("Storage", name="pool0"), "1.5 GB")
 
         # Grow the logical volume in Cockpit, the pool should grow automatically
@@ -801,9 +869,9 @@ class TestStorageStratisReboot(storagelib.StorageCase):
         m.execute("lvresize vgroup0/lvol0 -L +100000256b")
         b.wait_visible(self.card_row("Storage", name="pool0") + ' .ct-icon-exclamation-triangle')
         self.click_card_row("Storage", name="pool0")
-        b.wait_visible('.pf-v5-c-alert:contains("This pool does not use all the space")')
+        b.wait_visible('.pf-v6-c-alert:contains("This pool does not use all the space")')
         b.click('button:contains("Grow the pool")')
-        b.wait_not_present('.pf-v5-c-alert')
+        b.wait_not_present('.pf-v6-c-alert')
         b.wait_in_text(self.card_desc("Stratis pool", "Usage"), "1.7 GB")
 
         b.go("#/")
@@ -822,6 +890,10 @@ class TestStorageStratisReboot(storagelib.StorageCase):
         b.wait_not_present(self.card_button("LVM2 logical volume", "Grow content"))
         b.go("#/")
         b.wait_in_text(self.card_row("Storage", name="pool0"), "1.8 GB")
+
+    @testlib.skipImage("Stratis too old for legacy tests", *V1_POOL_IMAGES)
+    def testPoolResizeLegacy(self):
+        self.testPoolResize(legacy=True)
 
 
 @testlib.skipImage("No Stratis", "debian-*", "ubuntu-*", "arch")
@@ -860,14 +932,14 @@ class TestStoragePackagesStratis(packagelib.PackageCase, storagelib.StorageCase)
             b.wait_visible(self.card_row("Storage", name="pool0"))
         else:
             dropdown_toggle = self.dropdown_toggle(self.card_header("Storage"))
-            raid_action = self.dropdown_action(self.card_header("Storage"), "Create MDRAID device")
-            stratis_action = self.dropdown_action(self.card_header("Storage"), "Create Stratis pool")
+            raid_action = self.dropdown_action("Create MDRAID device")
+            stratis_action = self.dropdown_action("Create Stratis pool")
             b.click(dropdown_toggle)
             b.wait_visible(raid_action)
             b.wait_not_present(stratis_action)
 
 
-@testlib.skipImage("No Stratis", "debian-*", "ubuntu-*")
+@testlib.skipImage("No Stratis", "debian-*", "ubuntu-*", "arch")
 @testlib.skipImage("Stratis too old", "rhel-8-*")
 class TestStorageStratisNBDE(packagelib.PackageCase, storagelib.StorageCase):
     provision = {
@@ -885,7 +957,7 @@ class TestStorageStratisNBDE(packagelib.PackageCase, storagelib.StorageCase):
 
         self.stop_type_opt = get_stratis_stop_type_opt(self.machine.execute)
 
-    def testBasic(self):
+    def testBasic(self, legacy=False):
         m = self.machine
         b = self.browser
 
@@ -904,28 +976,34 @@ class TestStorageStratisNBDE(packagelib.PackageCase, storagelib.StorageCase):
         b.wait_visible(self.card_row("Storage", name=dev_2))
 
         # Create an encrypted pool with both a passphrase and a keyserver
-        self.dialog_open_with_retry(trigger=lambda: self.click_devices_dropdown("Create Stratis pool"),
-                                    expect=lambda: (self.dialog_is_present('disks', dev_1) and
-                                                    self.dialog_check({"name": "pool0"})))
-        self.dialog_set_val("encrypt_pass.on", val=True)
-        self.dialog_set_val("passphrase", "foodeeboodeebar")
-        self.dialog_set_val("passphrase2", "foodeeboodeebar")
-        self.dialog_set_val("encrypt_tang.on", val=True)
-        self.dialog_set_val("tang_url", "10.111.112.5")
-        self.dialog_set_val("disks", {dev_1: True})
-        self.dialog_apply()
-        b.wait_in_text("#dialog", "Check the key hash")
-        b.wait_in_text("#dialog", tang_m.execute("tang-show-keys").strip())
-        self.dialog_apply()
-        with b.wait_timeout(60):
-            self.dialog_wait_close()
+        if not legacy:
+            self.dialog_open_with_retry(trigger=lambda: self.click_devices_dropdown("Create Stratis pool"),
+                                        expect=lambda: (self.dialog_is_present('disks', dev_1) and
+                                                        self.dialog_check({"name": "pool0"})))
+            self.dialog_set_val("encrypt_pass.on", val=True)
+            self.dialog_set_val("passphrase", "foodeeboodeebar")
+            self.dialog_set_val("passphrase2", "foodeeboodeebar")
+            self.dialog_set_val("encrypt_tang.on", val=True)
+            self.dialog_set_val("tang_url", "10.111.112.5")
+            self.dialog_set_val("disks", {dev_1: True})
+            self.dialog_apply()
+            b.wait_in_text("#dialog", "Check the key hash")
+            b.wait_in_text("#dialog", tang_m.execute("tang-show-keys").strip())
+            self.dialog_apply()
+            with b.wait_timeout(60):
+                self.dialog_wait_close()
+        else:
+            create_pool_key(m, "pool0", "foodeeboodeebar")
+            create_legacy_pool(m, disks=[dev_1], keydesc="pool0", tang="10.111.112.5")
+            m.execute("stratis key unset pool0")
 
         self.click_card_row("Storage", name="pool0")
         b.wait_visible(self.card_desc("Encrypted Stratis pool", "Passphrase"))
         b.wait_in_text(self.card_desc("Encrypted Stratis pool", "Keyserver"), "10.111.112.5")
 
-        b.assert_pixels(self.card("Encrypted Stratis pool"), "header",
-                        ignore=['.pf-v5-c-description-list__group:contains(UUID)'])
+        if not legacy:
+            b.assert_pixels(self.card("Encrypted Stratis pool"), "header",
+                            ignore=['.pf-v6-c-description-list__group:contains(UUID)'])
 
         # Remove passphrase
         b.click(self.card_desc("Encrypted Stratis pool", "Passphrase") + " button:contains(Remove)")
@@ -940,10 +1018,16 @@ class TestStorageStratisNBDE(packagelib.PackageCase, storagelib.StorageCase):
         tang_m.execute("systemctl stop tangd.socket")
         b.click(self.card_button("Stratis pool", "Start"))
         self.dialog_wait_open()
-        # stratis' error message for unreachable tang server is very poor:
-        # https://bugzilla.redhat.com/show_bug.cgi?id=2246920 Version < 3.6.0 said
-        # "Error communicating with server 10.111.112.5", check this again after fixing
-        b.wait_in_text("#dialog", "Error")
+        if m.image not in V1_POOL_IMAGES and not legacy:
+            # For V2 pools (created by Stratis 3.8.0 and later),
+            # Cockpit doesn't know whether they have a passphrase or
+            # not. So it asks always.
+            self.dialog_wait_val("passphrase", "")
+        else:
+            # stratis' error message for unreachable tang server is very poor:
+            # https://bugzilla.redhat.com/show_bug.cgi?id=2246920 Version < 3.6.0 said
+            # "Error communicating with server 10.111.112.5", check this again after fixing
+            b.wait_in_text("#dialog", "Error")
         self.dialog_cancel()
         self.dialog_wait_close()
 
@@ -1025,13 +1109,17 @@ class TestStorageStratisNBDE(packagelib.PackageCase, storagelib.StorageCase):
                      'mount_point': '/run/fsys1'})
         b.wait_text(self.card_row_col("Stratis filesystems", 1, 1), "fsys1")
         b.wait_text(self.card_row_col("Stratis filesystems", 1, 3), "/run/fsys1")
-        m.reboot()
+        self.reboot()
         m.start_cockpit()
         b.relogin()
         b.enter_page("/storage")
         b.wait_visible(self.card("Stratis pool"))
         b.wait_text(self.card_row_col("Stratis filesystems", 1, 1), "fsys1")  # should be started after boot
         b.wait_text(self.card_row_col("Stratis filesystems", 1, 3), "/run/fsys1")  # should be mounted after boot
+
+    @testlib.skipImage("Stratis too old for legacy tests", *V1_POOL_IMAGES)
+    def testBasicLegacy(self):
+        self.testBasic(legacy=True)
 
 
 if __name__ == '__main__':

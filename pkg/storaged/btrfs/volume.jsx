@@ -27,12 +27,21 @@ import { VolumeIcon } from "../icons/gnome-icons.jsx";
 
 import {
     new_card, new_page, PAGE_CATEGORY_VIRTUAL,
-    get_crossrefs, ChildrenTable, PageTable, StorageCard, StorageDescription
+    get_crossrefs, ChildrenTable, PageTable, StorageCard, StorageDescription,
+    navigate_away_from_card
 } from "../pages.jsx";
 import { StorageUsageBar, StorageLink } from "../storage-controls.jsx";
-import { fmt_size_long, validate_fsys_label, should_ignore } from "../utils.js";
-import { btrfs_usage, btrfs_is_volume_mounted } from "./utils.jsx";
-import { dialog_open, TextInput } from "../dialog.jsx";
+import {
+    fmt_size_long, validate_fsys_label, should_ignore,
+    get_active_usage, teardown_active_usage,
+    reload_systemd,
+} from "../utils.js";
+import { btrfs_usage } from "./utils.jsx";
+import {
+    dialog_open, TextInput,
+    BlockingMessage, TeardownMessage,
+    init_teardown_usage
+} from "../dialog.jsx";
 import { make_btrfs_subvolume_pages } from "./subvolume.jsx";
 import { btrfs_device_actions } from "./device.jsx";
 
@@ -49,6 +58,46 @@ const _ = cockpit.gettext;
  *        -> btrfs device
  *            -> block device
  */
+
+async function btrfs_delete(uuid, card) {
+    const volume = client.uuids_btrfs_volume[uuid];
+    const name = volume.data.label || uuid;
+
+    const usage = get_active_usage(client, volume.path, _("delete"), undefined, false, undefined, true);
+
+    if (usage.Blocking) {
+        dialog_open({
+            Title: cockpit.format(_("$0 is in use"), name),
+            Body: BlockingMessage(usage)
+        });
+        return;
+    }
+
+    dialog_open({
+        Title: cockpit.format(_("Permanently delete $0?"), name),
+        Teardown: TeardownMessage(usage),
+        Action: {
+            Danger: _("Deleting erases all data on a btrfs volume."),
+            Title: _("Delete"),
+            disable_on_error: usage.Teardown,
+            action: async function () {
+                await teardown_active_usage(client, usage);
+                const blocks = client.uuids_btrfs_blocks[uuid];
+                for (let i = 0; i < blocks.length; i++) {
+                    // All block devices share the same Configuration
+                    // property, so we only tear down the first.
+                    await blocks[i].Format("empty", { 'tear-down': { t: 'b', v: i == 0 } });
+                }
+                await reload_systemd();
+                navigate_away_from_card(card);
+            }
+        },
+        Inits: [
+            init_teardown_usage(client, usage)
+        ]
+    });
+}
+
 export function make_btrfs_volume_page(parent, uuid) {
     const block_devices = client.uuids_btrfs_blocks[uuid];
     const block_btrfs = client.blocks_fsys_btrfs[block_devices[0].path];
@@ -74,6 +123,13 @@ export function make_btrfs_volume_page(parent, uuid) {
         page_size: use[1],
         component: BtrfsVolumeCard,
         props: { block_devices, uuid, use },
+        actions: [
+            {
+                title: _("Delete filesystem"),
+                action: () => btrfs_delete(uuid, btrfs_volume_card),
+                danger: true,
+            },
+        ],
     });
 
     const subvolumes_card = make_btrfs_subvolumes_card(btrfs_volume_card, null, null);
@@ -82,7 +138,7 @@ export function make_btrfs_volume_page(parent, uuid) {
     make_btrfs_subvolume_pages(subvolumes_page, volume);
 }
 
-export function rename_dialog(block_btrfs, label) {
+function rename_dialog(block_btrfs, label, rw_mount_point) {
     dialog_open({
         Title: _("Change label"),
         Fields: [
@@ -94,36 +150,58 @@ export function rename_dialog(block_btrfs, label) {
         ],
         Action: {
             Title: _("Save"),
-            action: function (vals) {
-                return block_btrfs.SetLabel(vals.name, {});
+            action: async function (vals) {
+                if (rw_mount_point) {
+                    await cockpit.spawn(["btrfs", "filesystem", "label", rw_mount_point, vals.name],
+                                        { superuser: true });
+                    const block = client.blocks[block_btrfs.path];
+                    await block.Rescan({});
+                } else
+                    await block_btrfs.SetLabel(vals.name, {});
             }
         }
     });
 }
 
-const BtrfsVolumeCard = ({ card, block_devices, uuid, use }) => {
-    const block_btrfs = client.blocks_fsys_btrfs[block_devices[0].path];
+export const BtrfsLabelDescription = ({ block_btrfs }) => {
     const label = block_btrfs.data.label || "-";
 
-    // Changing the label is only supported when the device is not mounted
-    // otherwise we will get btrfs filesystem error ERROR: device /dev/vda5 is
-    // mounted, use mount point. This is a libblockdev/udisks limitation as it
-    // only passes the device and not the mountpoint when the device is mounted.
-    // https://github.com/storaged-project/libblockdev/issues/966
-    const is_mounted = btrfs_is_volume_mounted(client, block_devices);
+    // We can change the label when at least one filesystem subvolume
+    // is mounted rw, or when nothing is mounted.
+
+    let rw_mount_point = null;
+    let is_mounted = false;
+    const mount_points = client.btrfs_mounts[block_btrfs.data.uuid];
+    for (const id in mount_points) {
+        const mp = mount_points[id];
+        if (mp.mount_points.length > 0)
+            is_mounted = true;
+        if (mp.rw_mount_points.length > 0 && !rw_mount_point)
+            rw_mount_point = mp.rw_mount_points[0];
+    }
+
+    let excuse = null;
+    if (is_mounted && !rw_mount_point)
+        excuse = _("Filesystem is mounted read-only");
+
+    return <StorageDescription title={_("Label")}
+                               value={label}
+                               action={
+                                   <StorageLink onClick={() => rename_dialog(block_btrfs, label, rw_mount_point)}
+                                                excuse={excuse}>
+                                       {_("edit")}
+                                   </StorageLink>}
+    />;
+};
+
+const BtrfsVolumeCard = ({ card, block_devices, uuid, use }) => {
+    const block_btrfs = client.blocks_fsys_btrfs[block_devices[0].path];
 
     return (
         <StorageCard card={card}>
             <CardBody>
                 <DescriptionList className="pf-m-horizontal-on-sm">
-                    <StorageDescription title={_("Label")}
-                                                value={label}
-                                                action={
-                                                    <StorageLink onClick={() => rename_dialog(block_btrfs, label)}
-                                                               excuse={is_mounted ? _("Btrfs volume is mounted") : null}>
-                                                        {_("edit")}
-                                                    </StorageLink>}
-                    />
+                    <BtrfsLabelDescription block_btrfs={block_btrfs} />
                     <StorageDescription title={_("UUID")} value={uuid} />
                     <StorageDescription title={_("Capacity")} value={fmt_size_long(use[1])} />
                     <StorageDescription title={_("Usage")}>
@@ -132,11 +210,10 @@ const BtrfsVolumeCard = ({ card, block_devices, uuid, use }) => {
                 </DescriptionList>
             </CardBody>
             <CardHeader><strong>{_("btrfs devices")}</strong></CardHeader>
-            <CardBody className="contains-list">
-                <PageTable emptyCaption={_("No devices found")}
-                                   aria-label={_("btrfs device")}
-                                   crossrefs={get_crossrefs(uuid)} />
-            </CardBody>
+            <PageTable
+                emptyCaption={_("No devices found")}
+                aria-label={_("btrfs device")}
+                crossrefs={get_crossrefs(uuid)} />
         </StorageCard>
     );
 };
@@ -153,11 +230,10 @@ export function make_btrfs_subvolumes_card(next, block, backing_block) {
 const BtrfsSubVolumesCard = ({ card }) => {
     return (
         <StorageCard card={card}>
-            <CardBody className="contains-list">
-                <ChildrenTable emptyCaption={_("No subvolumes")}
-                               aria-label={_("btrfs subvolumes")}
-                               page={card.page} />
-            </CardBody>
+            <ChildrenTable
+                emptyCaption={_("No subvolumes")}
+                aria-label={_("btrfs subvolumes")}
+                page={card.page} />
         </StorageCard>
     );
 };

@@ -65,7 +65,7 @@ export const NetworkInterfaceMembers = ({
             const isActive = (dev && dev.State == 100 && dev.Carrier === true);
             const onoff = (
                 <Switch
-                    aria-label={cockpit.format(_("Switch of $0"), iface.Name)}
+                    aria-label={cockpit.format(_("Switch off $0"), iface.Name)}
                     isDisabled={!privileged}
                     isChecked={!!(dev && dev.ActiveConnection)}
                     onChange={(_event, val) => {
@@ -117,7 +117,7 @@ export const NetworkInterfaceMembers = ({
                                 </Button>}
                             </div>
                         ),
-                        props: { className: "pf-v5-c-table__action" }
+                        props: { className: "pf-v6-c-table__action" }
                     },
                 ],
                 props: {
@@ -197,7 +197,7 @@ export const NetworkInterfaceMembers = ({
     );
 
     return (
-        <Card id="network-interface-members" className="network-interface-members">
+        <Card isPlain id="network-interface-members" className="network-interface-members">
             <CardHeader actions={{ actions: add_btn }}>
                 <CardTitle component="h2">{_("Interface members")}</CardTitle>
             </CardHeader>

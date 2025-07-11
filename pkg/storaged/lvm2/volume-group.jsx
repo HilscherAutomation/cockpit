@@ -25,8 +25,6 @@ import { Alert } from "@patternfly/react-core/dist/esm/components/Alert/index.js
 import { CardHeader, CardBody } from "@patternfly/react-core/dist/esm/components/Card/index.js";
 import { DescriptionList } from "@patternfly/react-core/dist/esm/components/DescriptionList/index.js";
 
-import { useObject } from "hooks";
-
 import { VolumeIcon } from "../icons/gnome-icons.jsx";
 import { StorageButton, StorageLink } from "../storage-controls.jsx";
 import {
@@ -39,6 +37,7 @@ import {
     validate_lvm2_name,
     get_available_spaces, prepare_available_spaces,
     reload_systemd, should_ignore,
+    contains_rootfs,
 } from "../utils.js";
 
 import {
@@ -69,6 +68,9 @@ function vgroup_rename(client, vgroup, card) {
         ],
         Action: {
             Title: _("Rename"),
+            Danger: contains_rootfs(client, vgroup.path)
+                ? _("This volume group contains the root filesystem. Renaming it might require further changes to the bootloader configuration or kernel command line.")
+                : null,
             action: async function (vals) {
                 await vgroup.Rename(vals.name, { });
                 navigate_to_new_card_location(card, ["vg", vals.name]);
@@ -202,7 +204,7 @@ function add_disk(vgroup) {
                                  if (disks.length === 0)
                                      return _("At least one disk is needed.");
                              },
-                             spaces: get_available_spaces(client).filter(filter_inside_vgroup)
+                             spaces: get_available_spaces().filter(filter_inside_vgroup)
                          })
         ],
         Action: {
@@ -273,41 +275,19 @@ export function make_lvm2_volume_group_page(parent, vgroup) {
     make_logical_volume_pages(vgroup_page, vgroup);
 }
 
-function vgroup_poller(vgroup) {
-    let timer = null;
-
-    if (vgroup.NeedsPolling) {
-        timer = window.setInterval(() => { vgroup.Poll() }, 2000);
-    }
-
-    function stop() {
-        if (timer)
-            window.clearInterval(timer);
-    }
-
-    return {
-        stop
-    };
-}
-
 const LVM2LogicalVolumesCard = ({ card, vgroup }) => {
     return (
         <StorageCard card={card}>
-            <CardBody className="contains-list">
-                <ChildrenTable emptyCaption={_("No logical volumes")}
-                               aria-label={_("LVM2 logical volumes")}
-                               page={card.page} />
-            </CardBody>
+            <ChildrenTable
+                emptyCaption={_("No logical volumes")}
+                aria-label={_("LVM2 logical volumes")}
+                page={card.page} />
         </StorageCard>
     );
 };
 
 const LVM2VolumeGroupCard = ({ card, vgroup }) => {
     const has_missing_pvs = vgroup.MissingPhysicalVolumes && vgroup.MissingPhysicalVolumes.length > 0;
-
-    useObject(() => vgroup_poller(vgroup),
-              poller => poller.stop(),
-              [vgroup]);
 
     function is_partial_linear_lvol(block) {
         const lvm2 = client.blocks_lvm2[block.path];
@@ -390,11 +370,10 @@ const LVM2VolumeGroupCard = ({ card, vgroup }) => {
                 </DescriptionList>
             </CardBody>
             <CardHeader><strong>{_("Physical volumes")}</strong></CardHeader>
-            <CardBody className="contains-list">
-                <PageTable emptyCaption={_("No physical volumes found")}
-                           aria-label={_("LVM2 physical volumes")}
-                           crossrefs={get_crossrefs(vgroup)} />
-            </CardBody>
+            <PageTable
+                emptyCaption={_("No physical volumes found")}
+                aria-label={_("LVM2 physical volumes")}
+                crossrefs={get_crossrefs(vgroup)} />
         </StorageCard>
     );
 };

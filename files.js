@@ -28,7 +28,7 @@ const info = {
         "playground/remote.tsx",
 
         "selinux/selinux.js",
-        "shell/shell.js",
+        "shell/shell.jsx",
         "sosreport/sosreport.jsx",
         "static/login.js",
         "storaged/storaged.jsx",
@@ -55,17 +55,18 @@ const info = {
         "base1/test-echo.js",
         "base1/test-events.js",
         "base1/test-external.js",
-        "base1/test-file.js",
+        "base1/test-file.ts",
         "base1/test-format.ts",
         "base1/test-framed-cache.js",
         "base1/test-framed.js",
         "base1/test-fsinfo.ts",
         "base1/test-http.js",
+        "base1/test-info.ts",
         "base1/test-journal-renderer.js",
         "base1/test-locale.js",
         "base1/test-location.js",
         "base1/test-metrics.js",
-        "base1/test-no-jquery.js",
+        "base1/test-path.ts",
         "base1/test-permissions.js",
         "base1/test-promise.ts",
         "base1/test-protocol.js",
@@ -77,8 +78,7 @@ const info = {
         "base1/test-types.ts",
         "base1/test-user.js",
         "base1/test-websocket.js",
-
-        "lib/test-path.ts",
+        "base1/test-import-json.ts",
 
         "kdump/test-config-client.js",
 
@@ -124,6 +124,7 @@ const info = {
         "shell/images/server-large.png",
         "shell/images/server-small.png",
         "shell/images/cockpit-icon.svg",
+        "shell/images/cockpit-icon-gray.svg",
         "shell/images/bg-plain.jpg",
         "shell/index.html",
         "shell/shell.html",
@@ -152,6 +153,15 @@ const nodedir = path.relative(process.cwd(), path.resolve(srcdir, "node_modules"
 
 export const all_subdirs = Array.from(new Set(info.entries.map(key => key.split('/')[0])));
 
+// This are the fonts we used up until migrating to Patternfly v6
+// It is kept here to make sure all dependencies of the fonts works like in
+// third-party plugins etc.
+
+// With the PF6 migration we now want to use Variable Fonts (VF) to ensure better
+// Patternfly visuals, and we will use a new directory structure to avoid hardcoding
+// @font-face.
+//
+// This copies all non-VF Red Hat fonts to our `static/fonts/` directory.
 const redhat_fonts = [
     "Text-Bold", "Text-BoldItalic", "Text-Italic", "Text-Medium", "Text-MediumItalic", "Text-Regular",
     "Display-Black", "Display-BlackItalic", "Display-Bold", "Display-BoldItalic",
@@ -164,6 +174,33 @@ const redhat_fonts = [
     return {
         from: path.resolve(nodedir, fontsdir, subdir, 'RedHat' + name + '.woff2'),
         to: 'static/fonts/'
+    };
+});
+
+// Different directory structure than our redhat_fonts, which makes it easier
+// to use the Patternfly default src and avoid hardcoding our own @font-face.
+//
+// This copies all variable fonts (VF in the name) to subdirectories:
+// static/fonts/
+// ├── RedHatDisplay
+// │   └── RedHatDisplayVF.woff2
+// ├── RedHatMono
+// │   ├── RedHatMonoVF-Italic.woff2
+// │   └── RedHatMonoVF.woff2
+// ├── RedHatText
+// │   ├── RedHatTextVF-Italic.woff2
+// │   └── RedHatTextVF.woff2
+const redhat_fonts_variable_font = [
+    "Text",
+    "Display",
+    "Mono",
+].map(name => {
+    const subdir = 'RedHat' + name;
+    const fontsdir = '@patternfly/patternfly/assets/fonts';
+
+    return {
+        from: path.resolve(nodedir, fontsdir, subdir) + '/**/*VF*.woff2',
+        to: `static/fonts/${subdir}`
     };
 });
 
@@ -194,7 +231,7 @@ export const getFiles = subdir => {
         });
     }
 
-    return ({ entryPoints, assetFiles: files, redhat_fonts });
+    return ({ entryPoints, assetFiles: files, redhat_fonts: redhat_fonts.concat(redhat_fonts_variable_font) });
 };
 
 export const getTestFiles = () => info.tests;

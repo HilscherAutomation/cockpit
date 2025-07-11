@@ -1,15 +1,11 @@
 #!/usr/bin/make -f
 
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
 DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
 
 # we need an apparmor profile for >= 4.0; this exists in Ubuntu >= 24.04, but not in Debian yet
 PRE4AA = $(filter $(shell . /etc/os-release; echo $${VERSION_ID:-unstable}),22.04 11 12 unstable)
-
-# pcp isn't in Debian testing right now
-ifeq ($(shell . /etc/os-release; echo $${VERSION_CODENAME}),trixie)
-    export DH_OPTIONS = -Ncockpit-pcp
-    CONFIG_OPTIONS := --disable-pcp
-endif
 
 # keep the host switcher on in currently supported stable releases
 STABLE = $(filter $(shell . /etc/os-release; echo $${VERSION_CODENAME}),bookworm jammy noble)
@@ -41,7 +37,7 @@ override_dh_auto_configure:
 override_dh_auto_install:
 	DEB_PYTHON_INSTALL_LAYOUT=deb dh_auto_install
 
-# avoid trying to start cockpit-motd.service and cockpit-wsinstance-*.socket etc.
+# avoid trying to start cockpit-issue.service and cockpit-wsinstance-*.socket etc.
 override_dh_installsystemd:
 	dh_installsystemd -p cockpit-ws cockpit.socket
 
@@ -51,17 +47,20 @@ override_dh_install:
 	install -p -m 644 tools/cockpit.debian.pam debian/tmp/etc/pam.d/cockpit
 
 	# don't ship broken branding symlinks
-	for d in rhel fedora centos scientific opensuse; do rm -r debian/tmp/usr/share/cockpit/branding/$$d; done
+	for d in rhel fedora centos opensuse; do rm -r debian/tmp/usr/share/cockpit/branding/$$d; done
 	dpkg-vendor --derives-from ubuntu || rm -r debian/tmp/usr/share/cockpit/branding/ubuntu
 
 	# handled by package maintainer scripts
 	rm debian/tmp/etc/motd.d/cockpit debian/tmp/etc/issue.d/cockpit.issue
 
+	# already processed into debian/copyright
+	rm -r debian/tmp/usr/share/doc/cockpit/legal
+
 	# unpackaged modules
 	rm -r debian/tmp/usr/share/cockpit/kdump
-	rm debian/tmp/usr/share/metainfo/org.cockpit-project.cockpit-kdump.metainfo.xml
+	rm debian/tmp/usr/share/metainfo/org.cockpit_project.cockpit_kdump.metainfo.xml
 	rm -r debian/tmp/usr/share/cockpit/selinux
-	rm debian/tmp/usr/share/metainfo/org.cockpit-project.cockpit-selinux.metainfo.xml
+	rm debian/tmp/usr/share/metainfo/org.cockpit_project.cockpit_selinux.metainfo.xml
 
 	dh_install -Xusr/src/debug
 	# we don't need this, it contains full build paths and breaks reproducibility
@@ -73,14 +72,11 @@ ifeq ($(PRE4AA),)
 	install -p -m 644 tools/apparmor.d/cockpit-desktop debian/cockpit-ws/etc/apparmor.d/
 endif
 
-	make install-tests DESTDIR=debian/cockpit-tests
-
 execute_after_dh_install-indep:
 	# avoid dh_missing failure
 	rm -r debian/tmp/usr/lib/python*
 
-# run pytests *after* installation, so that we can make sure that we installed the right files
-execute_after_dh_install-arch:
+	# run pytests *after* installation, so that we can make sure that we installed the right files
 ifeq (, $(findstring nocheck, $(DEB_BUILD_OPTIONS)))
 ifeq ($(shell . /etc/os-release; echo $${VERSION_ID:-unstable}),22.04)
 	NO_QUNIT=1 PYTHONPATH=$$(ls -d debian/cockpit-bridge/usr/lib/python3*/dist-packages) python3 -m pytest -vv -k 'not linter and not test_descriptions'
@@ -88,7 +84,3 @@ else
 	NO_QUNIT=1 pytest -vv -k 'not linter and not test_descriptions' -opythonpath=$$(ls -d debian/cockpit-bridge/usr/lib/python3*/dist-packages)
 endif
 endif
-
-# dh compat 14 does that automatically, remove when upgrading
-execute_before_dh_installtmpfiles:
-	dh_installsysusers

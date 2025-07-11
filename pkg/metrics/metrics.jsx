@@ -28,14 +28,15 @@ import { DescriptionList, DescriptionListDescription, DescriptionListGroup, Desc
 import { Flex, FlexItem } from "@patternfly/react-core/dist/esm/layouts/Flex/index.js";
 import { Grid, GridItem } from "@patternfly/react-core/dist/esm/layouts/Grid/index.js";
 import { Icon } from "@patternfly/react-core/dist/esm/components/Icon/index.js";
-import { Modal } from "@patternfly/react-core/dist/esm/components/Modal/index.js";
-import { Page, PageGroup, PageSection, PageSectionVariants } from "@patternfly/react-core/dist/esm/components/Page/index.js";
+import {
+    Modal, ModalBody, ModalFooter, ModalHeader
+} from '@patternfly/react-core/dist/esm/components/Modal/index.js';
+import { Page, PageGroup, PageSection, PageBreadcrumb } from "@patternfly/react-core/dist/esm/components/Page/index.js";
 import { Popover } from "@patternfly/react-core/dist/esm/components/Popover/index.js";
 import { Progress, ProgressVariant } from "@patternfly/react-core/dist/esm/components/Progress/index.js";
-import { Select, SelectOption } from "@patternfly/react-core/dist/esm/deprecated/components/Select/index.js";
 import { Stack, StackItem } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
 import { Switch } from "@patternfly/react-core/dist/esm/components/Switch/index.js";
-import { Text, TextContent, TextVariants } from "@patternfly/react-core/dist/esm/components/Text/index.js";
+import { Content, ContentVariants } from "@patternfly/react-core/dist/esm/components/Content/index.js";
 import { Tooltip } from "@patternfly/react-core/dist/esm/components/Tooltip/index.js";
 import { Table, Thead, Td, Th, Tr, Tbody, TableGridBreakpoint, TableVariant, TableText } from '@patternfly/react-table';
 import {
@@ -55,6 +56,8 @@ import { get_manifest_config_matchlist } from "utils";
 import { useObject, useEvent, useInit } from "hooks.js";
 import { WithDialogs, useDialogs } from "dialogs.jsx";
 
+import { SimpleSelect } from "cockpit-components-simple-select.jsx";
+import { CheckboxSelect } from "cockpit-components-checkbox-select.jsx";
 import { EmptyStatePanel } from "../lib/cockpit-components-empty-state.jsx";
 import { JournalOutput } from "cockpit-components-logs-panel.jsx";
 import { install_dialog } from "cockpit-components-install-dialog.jsx";
@@ -68,7 +71,7 @@ const MSEC_PER_H = 3600000;
 const INTERVAL = 5000;
 const SAMPLES_PER_H = MSEC_PER_H / INTERVAL;
 const SAMPLES_PER_MIN = SAMPLES_PER_H / 60;
-const SVG_YMAX = (SAMPLES_PER_MIN - 1).toString();
+const SVG_YMAX = (SAMPLES_PER_MIN - 1);
 const LOAD_HOURS = 12;
 const _ = cockpit.gettext;
 
@@ -168,6 +171,8 @@ const CURRENT_METRICS = [
     { name: "cpu.core.nice", derive: "rate" },
     { name: "disk.dev.read", units: "bytes", derive: "rate" },
     { name: "disk.dev.written", units: "bytes", derive: "rate" },
+    { name: "mount.total", units: "bytes" },
+    { name: "mount.used", units: "bytes" },
 ];
 
 const CPU_TEMPERATURE_METRICS = [
@@ -238,6 +243,18 @@ function make_rows(rows, rowProps, columnLabels) {
     );
 }
 
+async function get_pcp_packages() {
+    const os_release = await read_os_release();
+    const pcp_packages = ["pcp"];
+
+    // PCP contains the Python module on Arch Linux, for all other distro's it is split up.
+    if (os_release.ID !== "arch") {
+        pcp_packages.push("python3-pcp");
+    }
+
+    return pcp_packages;
+}
+
 class CurrentMetrics extends React.Component {
     constructor(props) {
         super(props);
@@ -282,14 +299,10 @@ class CurrentMetrics extends React.Component {
         this.onMetricsUpdate = this.onMetricsUpdate.bind(this);
         this.onTemperatureUpdate = this.onTemperatureUpdate.bind(this);
         this.onPrivilegedMetricsUpdate = this.onPrivilegedMetricsUpdate.bind(this);
-        this.updateMounts = this.updateMounts.bind(this);
         this.updateLoad = this.updateLoad.bind(this);
 
         cockpit.addEventListener("visibilitychange", this.onVisibilityChange);
         this.onVisibilityChange();
-
-        // regularly update info about filesystems
-        this.updateMounts();
 
         // there is no internal metrics channel for load yet; see https://github.com/cockpit-project/cockpit/pull/14510
         this.updateLoad();
@@ -337,71 +350,6 @@ class CurrentMetrics extends React.Component {
             this.metrics_channel = cockpit.channel({ payload: "metrics1", source: "internal", interval: INTERVAL, metrics: CURRENT_METRICS });
             this.metrics_channel.addEventListener("message", this.onMetricsUpdate);
         }
-    }
-
-    /* Return Set of mount points which should not be shown in Disks card */
-    hideMounts(procMounts) {
-        const result = new Set();
-        procMounts.trim().split("\n")
-                .forEach(line => {
-                    // looks like this: /dev/loop1 /var/mnt iso9660 ro,relatime,nojoliet,check=s,map=n,blocksize=2048 0 0
-                    const fields = line.split(' ');
-                    const options = fields[3].split(',');
-
-                    /* hide read-only loop mounts; these are often things like snaps or iso images
-                     * which are always at 100% capacity, but are uninteresting for disk usage alerts */
-                    if ((fields[0].indexOf("/loop") >= 0 && options.indexOf('ro') >= 0))
-                        result.add(fields[1]);
-                    /* hide flatpaks */
-                    if ((fields[0].indexOf('revokefs-fuse') >= 0 && fields[1].indexOf('flatpak') >= 0))
-                        result.add(fields[1]);
-                });
-        return result;
-    }
-
-    updateMounts() {
-        Promise.all([
-            /* df often exits with non-zero if it encounters any filesystem it can't read;
-               but that's fine, get info about all the others */
-            cockpit.script("df --local --exclude-type=tmpfs --exclude-type=devtmpfs --block-size=1 --output=target,size,avail,pcent || true",
-                           { err: "message" }),
-            cockpit.file("/proc/mounts").read()
-        ])
-                .then(([df_out, mounts_out]) => {
-                    const hide = this.hideMounts(mounts_out);
-
-                    // skip first line with the headings
-                    const mounts = [];
-                    df_out.trim()
-                            .split("\n")
-                            .slice(1)
-                            .forEach(s => {
-                                const fields = s.split(/ +/);
-                                if (fields.length != 4) {
-                                    console.warn("Invalid line in df:", s);
-                                    return;
-                                }
-
-                                if (hide.has(fields[0]))
-                                    return;
-                                mounts.push({
-                                    target: fields[0],
-                                    size: Number(fields[1]),
-                                    avail: Number(fields[2]),
-                                    use: Number(fields[3].slice(0, -1)), /* strip off '%' */
-                                });
-                            });
-
-                    debug("df parsing done:", JSON.stringify(mounts));
-                    this.setState({ mounts });
-
-                    // update it again regularly
-                    window.setTimeout(this.updateMounts, 10000);
-                })
-                .catch(ex => {
-                    console.warn("Failed to run df or read /proc/mounts:", ex.toString());
-                    this.setState({ mounts: [] });
-                });
     }
 
     updateLoad() {
@@ -465,6 +413,8 @@ class CurrentMetrics extends React.Component {
             this.cgroupMemoryNames = data.metrics[10].instances.slice();
             console.assert(data.metrics[14].name === 'disk.dev.read');
             this.disksNames = data.metrics[14].instances.slice();
+            console.assert(data.metrics[16].name === 'mount.total');
+            this.mountPoints = data.metrics[16].instances.slice();
             debug("metrics message was meta, new net instance names", JSON.stringify(this.netInterfacesNames));
             return;
         }
@@ -548,6 +498,18 @@ class CurrentMetrics extends React.Component {
         if (notMappedContainers.length !== 0) {
             this.update_podman_name_mapping(notMappedContainers);
         }
+
+        const mountsTotal = this.samples[16];
+        const mountsUsed = this.samples[17];
+        newState.mounts = mountsTotal.map((mountTotal, i) => {
+            return {
+                target: this.mountPoints[i],
+                size: mountTotal,
+                avail: mountTotal - mountsUsed[i],
+                use: Math.round(mountsUsed[i] / mountTotal * 100),
+            };
+        });
+
         this.setState(newState);
     }
 
@@ -643,11 +605,11 @@ class CurrentMetrics extends React.Component {
         };
 
         let name_text = (
-            <Button variant="link" isInline component="a" key={name}
+            <Button variant="link" isInline isBlock component="a" key={name}
                     onClick={() => cgroupClickHandler(name, is_user, is_container, uid)}
                     isDisabled={is_container && !podman_installed}>
                 <TableText wrapModifier="truncate">
-                    {is_container ? _("pod") + " " + (this.getCachedPodName(uid, name) || name.substr(0, 12)) : name}
+                    {is_container ? _("pod") + " " + (this.getCachedPodName(uid, name) || name.substring(0, 12)) : name}
                 </TableText>
             </Button>
         );
@@ -766,7 +728,7 @@ class CurrentMetrics extends React.Component {
 
             allCpus = (
                 <Popover minWidth={0} aria-label={ _("View all CPUs") } bodyContent={cores}>
-                    <Button variant="link" className='pf-v5-u-font-size-sm'>{ _("View all CPUs") }</Button>
+                    <Button variant="link" className='pf-v6-u-font-size-sm'>{ _("View all CPUs") }</Button>
                 </Popover>);
         } else {
             cpu_label = this.state.cpuUsed + '%';
@@ -795,7 +757,7 @@ class CurrentMetrics extends React.Component {
                     <Thead>
                         <Tr>{diskColumns.map(col => <Th key={col}>{col}</Th>)}</Tr>
                     </Thead>
-                    <Tbody className="pf-v5-m-tabular-nums disks-nowrap">
+                    <Tbody className="pf-v6-m-tabular-nums disks-nowrap">
                         {make_rows(disksUsage, rowPropsDisks, diskColumns)}
                     </Tbody>
                 </Table>
@@ -803,7 +765,7 @@ class CurrentMetrics extends React.Component {
 
             allDisks = (
                 <Popover minWidth={0} aria-label={ _("View all disks") } bodyContent={disksTableContent}>
-                    <Button variant="link" className='pf-v5-u-font-size-sm'>{ _("View per-disk throughput") }</Button>
+                    <Button variant="link" className='pf-v6-u-font-size-sm'>{ _("View per-disk throughput") }</Button>
                 </Popover>
             );
         }
@@ -970,7 +932,7 @@ class CurrentMetrics extends React.Component {
                                         <Th>{_("Write")}</Th>
                                     </Tr>
                                 </Thead>
-                                <Tbody className="pf-v5-m-tabular-nums">
+                                <Tbody className="pf-v6-m-tabular-nums">
                                     {make_rows(this.state.topServicesDiskIO, rowPropsDiskIO, [_("Service"), _("Read"), _("Write")])}
                                 </Tbody>
                             </Table> }
@@ -1141,7 +1103,20 @@ class MetricsMinute extends React.Component {
         });
 
         let desc;
-        if (this.props.isExpanded && this.props.events) {
+        if (this.props.isExpanded && this.props.booted) {
+            const timestamp = this.props.startTime + (this.props.minute * 60000);
+            desc = (
+                <div className="metrics-events">
+                    <time>{ timeformat.time(timestamp) }</time>
+                    <span className="spikes_count" />
+                    <span className="spikes_info">
+                        <span className="type">
+                            {_("Boot")}
+                        </span>
+                    </span>
+                </div>
+            );
+        } else if (this.props.isExpanded && this.props.events) {
             const timestamp = this.props.startTime + (this.props.minute * 60000);
 
             const logsPanel = (
@@ -1210,6 +1185,7 @@ class MetricsHour extends React.Component {
         if (this.state.dataItems !== nextProps.data.length ||
             this.state.isHourExpanded !== nextState.isHourExpanded ||
             this.props.startTime !== nextProps.startTime ||
+            this.props.boots !== nextProps.boots ||
             Object.keys(this.props.selectedVisibility).some(itm => this.props.selectedVisibility[itm] != nextProps.selectedVisibility[itm])) {
             this.updateGraphs(nextProps.data, nextProps.startTime, nextProps.selectedVisibility, nextState.isHourExpanded);
             return false;
@@ -1277,6 +1253,8 @@ class MetricsHour extends React.Component {
             const dataOffset = minute * SAMPLES_PER_MIN;
             const dataSlice = normData.slice(dataOffset, dataOffset + SAMPLES_PER_MIN);
             const rawSlice = this.props.data.slice(dataOffset, dataOffset + SAMPLES_PER_MIN);
+            const is_boot = this.props.boots.includes(minute);
+
             minuteGraphs.push(
                 <MetricsMinute
                     isExpanded={isHourExpanded}
@@ -1286,7 +1264,8 @@ class MetricsHour extends React.Component {
                     rawData={rawSlice}
                     events={minute_events[minute]}
                     startTime={this.props.startTime}
-                    selectedVisibility={selectedVisibility} />
+                    selectedVisibility={selectedVisibility}
+                    booted={is_boot} />
             );
         }
 
@@ -1364,8 +1343,8 @@ const wait_cond = (cond, objects) => {
 
 const PCPConfigDialog = ({
     firewalldRequest,
-    needsLogout, setNeedsLogout,
     s_pmlogger, s_pmproxy, s_redis, s_redis_server, s_valkey,
+    packageInstallCallback,
 }) => {
     const Dialogs = useDialogs();
     const dialogInitialProxyValue = runningService(s_pmproxy) && (
@@ -1381,8 +1360,9 @@ const PCPConfigDialog = ({
     const handleInstall = async () => {
     // when enabling services, install missing packages on demand
         const missing = [];
-        if (dialogLoggerValue && !s_pmlogger.exists)
-            missing.push("cockpit-pcp");
+        if (dialogLoggerValue && !s_pmlogger.exists) {
+            missing.push(...await get_pcp_packages());
+        }
         const redisExists = () => s_redis.exists || s_redis_server.exists || s_valkey.exists;
         if (dialogProxyValue && !redisExists()) {
             const os_release = await read_os_release();
@@ -1395,8 +1375,6 @@ const PCPConfigDialog = ({
             Dialogs.close();
             await install_dialog(missing);
             debug("PCPConfig: package installation successful");
-            if (missing.indexOf("cockpit-pcp") >= 0)
-                setNeedsLogout(true);
             await wait_cond(() => (s_pmlogger.exists &&
                                    (!dialogProxyValue || (s_pmproxy.exists && redisExists()))),
                             [s_pmlogger, s_pmproxy, s_redis, s_redis_server, s_valkey]);
@@ -1458,79 +1436,80 @@ const PCPConfigDialog = ({
                                     firewalldRequest({ service: "pmproxy", title: _("Open the pmproxy service in the firewall to share metrics.") });
                                 else
                                     firewalldRequest(null);
+                                packageInstallCallback();
                             })
-                            .catch(err => { setPending(false); setDialogError(err.toString()) });
+                            .catch(err => { packageInstallCallback(); setPending(false); setDialogError(err.toString()) });
                 })
                 .catch(() => null); // ignore cancel in install dialog
     };
 
     return (
         <Modal position="top" variant="small" isOpen
-          id="pcp-settings-modal"
-          onClose={Dialogs.close}
-          title={ _("Metrics settings") }
-          description={
-              <div className="pcp-settings-modal-text">
-                  { _("Performance Co-Pilot collects and analyzes performance metrics from your system.") }
+            id="pcp-settings-modal"
+            onClose={Dialogs.close}
+        >
+            <ModalHeader title={ _("Metrics settings") }
+                description={
+                    <div className="pcp-settings-modal-text">
+                        { _("Performance Co-Pilot collects and analyzes performance metrics from your system.") }
 
-                  <Button component="a" variant="link" href="https://cockpit-project.org/guide/latest/feature-pcp.html"
-                                isInline
-                                target="_blank" rel="noopener noreferrer"
-                                icon={<ExternalLinkAltIcon />}>
-                      { _("Read more...") }
-                  </Button>
-              </div>
-          }
-                   footer={<>
-                       <Button variant='primary' onClick={handleSave} isDisabled={pending} isLoading={pending}>
-                           { _("Save") }
-                       </Button>
-                       <Button variant='link' className='btn-cancel' onClick={Dialogs.close}>
-                           {_("Cancel")}
-                       </Button>
-                   </>
-                   }>
+                        <Button component="a" variant="link" href="https://cockpit-project.org/guide/latest/feature-pcp.html"
+                                      isInline
+                                      target="_blank" rel="noopener noreferrer"
+                                      icon={<ExternalLinkAltIcon />}>
+                            { _("Read more...") }
+                        </Button>
+                    </div>}
+            />
+            <ModalBody>
+                <Stack hasGutter>
+                    { dialogError && <ModalError dialogError={ _("Failed to configure PCP") } dialogErrorDetail={dialogError} /> }
+                    <StackItem>
+                        <Switch id="switch-pmlogger"
+                                    isChecked={dialogLoggerValue}
+                                    isDisabled={!s_pmlogger.exists && !packagekitExists}
+                                    label={
+                                        <Flex>
+                                            <FlexItem>{ _("Collect metrics") }</FlexItem>
+                                            <Content>
+                                                <Content component={ContentVariants.small}>(pmlogger.service)</Content>
+                                            </Content>
+                                        </Flex>
+                                    }
+                                    onChange={(_event, enable) => {
+                                        // pmproxy needs pmlogger, auto-disable it
+                                        setDialogLoggerValue(enable);
+                                        if (!enable)
+                                            setDialogProxyValue(false);
+                                    }} />
 
-            <Stack hasGutter>
-                { dialogError && <ModalError dialogError={ _("Failed to configure PCP") } dialogErrorDetail={dialogError} /> }
-                <StackItem>
-                    <Switch id="switch-pmlogger"
-                                isChecked={dialogLoggerValue}
-                                isDisabled={!s_pmlogger.exists && !packagekitExists}
-                                label={
-                                    <Flex>
-                                        <FlexItem>{ _("Collect metrics") }</FlexItem>
-                                        <TextContent>
-                                            <Text component={TextVariants.small}>(pmlogger.service)</Text>
-                                        </TextContent>
-                                    </Flex>
-                                }
-                                onChange={(_event, enable) => {
-                                    // pmproxy needs pmlogger, auto-disable it
-                                    setDialogLoggerValue(enable);
-                                    if (!enable)
-                                        setDialogProxyValue(false);
-                                }} />
-
-                    <Switch id="switch-pmproxy"
-                                isChecked={dialogProxyValue}
-                                label={
-                                    <Flex>
-                                        <FlexItem>{ _("Export to network") }</FlexItem>
-                                        <TextContent>
-                                            <Text component={TextVariants.small}>(pmproxy.service)</Text>
-                                        </TextContent>
-                                    </Flex>
-                                }
-                                isDisabled={ !dialogLoggerValue }
-                            onChange={(_event, enable) => setDialogProxyValue(enable)} />
-                </StackItem>
-            </Stack>
+                        <Switch id="switch-pmproxy"
+                                    isChecked={dialogProxyValue}
+                                    label={
+                                        <Flex>
+                                            <FlexItem>{ _("Export to network") }</FlexItem>
+                                            <Content component={ContentVariants.small}>(pmproxy.service)</Content>
+                                        </Flex>
+                                    }
+                                    isDisabled={ !dialogLoggerValue }
+                                onChange={(_event, enable) => setDialogProxyValue(enable)} />
+                    </StackItem>
+                </Stack>
+            </ModalBody>
+            <ModalFooter>
+                <Button variant='primary' onClick={handleSave} isDisabled={pending} isLoading={pending}>
+                    { _("Save") }
+                </Button>
+                <Button variant='link' className='btn-cancel' onClick={Dialogs.close}>
+                    {_("Cancel")}
+                </Button>
+            </ModalFooter>
         </Modal>);
 };
 
-const PCPConfig = ({ buttonVariant, firewalldRequest, needsLogout, setNeedsLogout }) => {
+const PCPConfig = ({ buttonVariant, firewalldRequest }) => {
     const Dialogs = useDialogs();
+    const [packageInstallStatus, setPackageInstallStatus] = useState(null);
 
     const s_pmlogger = useObject(() => service.proxy("pmlogger.service"), null, []);
     const s_pmproxy = useObject(() => service.proxy("pmproxy.service"), null, []);
@@ -1546,7 +1525,7 @@ const PCPConfig = ({ buttonVariant, firewalldRequest, needsLogout, setNeedsLogou
     useEvent(s_redis_server, "changed");
     useEvent(s_valkey, "changed");
 
-    debug("PCPConfig s_pmlogger.state", s_pmlogger.state, "needs logout", needsLogout);
+    debug("PCPConfig s_pmlogger.state", s_pmlogger.state);
     debug("PCPConfig s_pmproxy state", s_pmproxy.state,
           "redis exists", s_redis.exists, "state", s_redis.state,
           "redis-server exists", s_redis_server.exists, "state", s_redis_server.state,
@@ -1556,18 +1535,20 @@ const PCPConfig = ({ buttonVariant, firewalldRequest, needsLogout, setNeedsLogou
         return null;
 
     function show_dialog() {
+        setPackageInstallStatus(null);
         Dialogs.show(<PCPConfigDialog firewalldRequest={firewalldRequest}
-                                      needsLogout={needsLogout} setNeedsLogout={setNeedsLogout}
                                       s_pmlogger={s_pmlogger}
                                       s_pmproxy={s_pmproxy}
-                                      s_redis={s_redis} s_redis_server={s_redis_server} s_valkey={s_valkey} />);
+                                      s_redis={s_redis} s_redis_server={s_redis_server} s_valkey={s_valkey}
+                                      packageInstallCallback={() => setPackageInstallStatus("done")} />);
     }
 
     return (
         <Button variant={buttonVariant} icon={<CogIcon />}
                 isDisabled={ invalidService(s_pmlogger) || invalidService(s_pmproxy) ||
                              invalidService(s_redis) || invalidService(s_redis_server) || invalidService(s_valkey) }
-                onClick={show_dialog}>
+                onClick={show_dialog}
+                data-test-install-finished={packageInstallStatus}>
             { _("Metrics settings") }
         </Button>);
 };
@@ -1595,7 +1576,9 @@ class MetricsHistory extends React.Component {
             selectedDate: null,
             packagekitExists: false,
             isBeibootBridge: false,
-            selectedVisibility: this.columns.reduce((a, v) => ({ ...a, [v[0]]: true }), {})
+            isPythonPCPInstalled: null,
+            selectedVisibility: this.columns.reduce((a, v) => ({ ...a, [v[0]]: true }), {}),
+            boots: [], // journalctl --list-boots as [{started: Date, ended: Date}]
         };
 
         this.handleMoreData = this.handleMoreData.bind(this);
@@ -1657,8 +1640,24 @@ class MetricsHistory extends React.Component {
         } catch (_ex) {}
 
         const isBeibootBridge = cmdline?.includes("ic# cockpit-bridge");
-
         this.setState({ packagekitExists, isBeibootBridge });
+
+        try {
+            // Only 14 days of metrics are shown
+            // Requires superuser on Debian/Ubuntu, on Fedora/Arch users in the wheel group can list without superuser.
+            const output = await cockpit.spawn(["journalctl", "--list-boots", "--since", "-15d", "--output", "json"], { superuser: "try" });
+            const list_boots = JSON.parse(output);
+            const boots = list_boots.map(boot => {
+                return {
+                    started: new Date(boot?.first_entry / 1000),
+                    ended: new Date(boot?.last_entry / 1000),
+                    current_boot: boot?.index === 0,
+                };
+            });
+            this.setState({ boots });
+        } catch (exc) {
+            console.warn("journalctl --list-boots failed", exc);
+        }
     }
 
     handleMoreData() {
@@ -1669,7 +1668,7 @@ class MetricsHistory extends React.Component {
         this.setState({ isDatepickerOpened: isOpen });
     }
 
-    handleSelect(e, sel) {
+    handleSelect(sel) {
         // Stop fetching of new data
         if (this.history_refresh_timer !== null) {
             window.clearTimeout(this.history_refresh_timer);
@@ -1686,9 +1685,9 @@ class MetricsHistory extends React.Component {
         }, () => this.load_data(sel, sel === this.today_midnight ? undefined : 24 * SAMPLES_PER_H, true));
     }
 
-    handleInstall() {
-        install_dialog("cockpit-pcp")
-                .then(() => this.props.setNeedsLogout(true))
+    async handleInstall() {
+        install_dialog(await get_pcp_packages())
+                .then(() => this.initialLoadData())
                 .catch(() => null); // ignore cancel
     }
 
@@ -1789,8 +1788,10 @@ class MetricsHistory extends React.Component {
                 this.setState({
                     loading: false,
                     metricsAvailable: false,
+                    isPythonPCPInstalled: message?.message !== "python3-pcp not installed",
                 });
             } else {
+                this.setState({ isPythonPCPInstalled: true });
                 debug("loaded metrics for timestamp", timeformat.dateTime(load_timestamp), "new hours", JSON.stringify(Array.from(new_hours)));
                 new_hours.forEach(hour => debug("hour", hour, "data", JSON.stringify(this.data[hour])));
 
@@ -1814,24 +1815,13 @@ class MetricsHistory extends React.Component {
     }
 
     render() {
-        if (this.props.needsLogout)
-            return <EmptyStatePanel
-                        icon={ExclamationCircleIcon}
-                        title={_("You need to relogin to be able to see metrics history")}
-                        action={_("Log out")}
-                        onAction={() => cockpit.logout(true)}
-            />;
-
         // on a single machine, cockpit-pcp depends on pcp; but this may not be the case in the beiboot scenario,
         // so additionally check if pcp is available on the logged in target machine
-        if ((cockpit.manifests && !cockpit.manifests.pcp) || this.pmlogger_service.exists === false)
+        if (this.state.isPythonPCPInstalled === false || this.pmlogger_service.exists === false)
             return <EmptyStatePanel
                         icon={ExclamationCircleIcon}
-                        title={_("Package cockpit-pcp is missing for metrics history")}
-                        action={this.state.isBeibootBridge === true
-                            // See https://github.com/cockpit-project/cockpit/issues/19143
-                            ? <Text>{ _("Installation not supported without installed cockpit package") }</Text>
-                            : this.state.packagekitExists && <Button onClick={this.handleInstall}>{_("Install cockpit-pcp")}</Button>}
+                        title={_("PCP is missing for metrics history")}
+                        action={this.state.packagekitExists && <Button onClick={this.handleInstall}>{_("Install PCP support")}</Button>}
             />;
 
         if (!this.state.metricsAvailable) {
@@ -1841,9 +1831,7 @@ class MetricsHistory extends React.Component {
             if (this.pmlogger_service.state === 'stopped') {
                 paragraph = _("pmlogger.service is not running");
                 action = <PCPConfig buttonVariant="primary"
-                                    firewalldRequest={this.props.firewalldRequest}
-                                    needsLogout={this.props.needsLogout}
-                                    setNeedsLogout={this.props.setNeedsLogout} />;
+                                    firewalldRequest={this.props.firewalldRequest} />;
             } else {
                 if (this.pmlogger_service.state === 'failed')
                     paragraph = _("pmlogger.service has failed");
@@ -1870,7 +1858,8 @@ class MetricsHistory extends React.Component {
         let nodata_alert = null;
         const lastHourIndex = this.state.hours.length - 1;
         if (!this.state.loading && this.state.hours.length > 0 && this.oldest_timestamp < this.state.hours[lastHourIndex]) {
-            let t1, t2;
+            let t1;
+            let t2;
             if (this.state.hours[lastHourIndex] - this.oldest_timestamp < 24 * MSEC_PER_H) {
                 t1 = timeformat.time(this.oldest_timestamp);
                 t2 = timeformat.time(this.state.hours[lastHourIndex]);
@@ -1889,32 +1878,30 @@ class MetricsHistory extends React.Component {
                 .map((_undef, i) => {
                     const date = this.today_midnight - i * 86400000;
                     const text = i == 0 ? _("Today") : timeformat.weekdayDate(date);
-                    return <SelectOption key={date} value={date}>{text}</SelectOption>;
+                    return { value: date, content: text };
                 });
 
         function Label(props) {
             return (
                 <div className={"metrics-label metrics-label-graph" + (props.items.length > 1 ? " have-saturation" : "")}>
                     <span>{props.label}</span>
-                    <TextContent className="metrics-sublabels">
-                        { props.items.map(i => <Text component={TextVariants.small} key={i}>{i}</Text>) }
-                    </TextContent>
+                    <Content className="metrics-sublabels">
+                        { props.items.map(i => <Content component={ContentVariants.small} key={i}>{i}</Content>) }
+                    </Content>
                 </div>
             );
         }
 
         const columnVisibilityMenuItems = this.columns.map(itm => {
-            return (
-                <SelectOption
-                    key={itm[0]}
-                    value={itm[1]}
-                    inputId={'column-visibility-option-' + itm[0]} />
-            );
+            return {
+                value: itm[0],
+                content: itm[1],
+            };
         });
         const selections = (
             this.columns
                     .filter(itm => this.state.selectedVisibility[itm[0]])
-                    .map(itm => itm[1])
+                    .map(itm => itm[0])
         );
 
         return (
@@ -1922,34 +1909,30 @@ class MetricsHistory extends React.Component {
                 <PageGroup stickyOnBreakpoint={{ default: 'top' }}>
                     <section className="metrics-heading">
                         <Flex className="metrics-selectors" spaceItems={{ default: 'spaceItemsSm' }}>
-                            <Select
-                                className="select-min metrics-label"
-                                aria-label={_("Jump to")}
-                                onToggle={this.handleToggle}
+                            <SimpleSelect
                                 onSelect={this.handleSelect}
-                                isOpen={this.state.isDatepickerOpened}
-                                selections={this.state.selectedDate}
-                                toggleId="date-picker-select-toggle"
-                            >
-                                {options}
-                            </Select>
-                            <Select
-                                toggleAriaLabel={_("Graph visibility options menu")}
-                                className="select-min metrics-label"
-                                variant="checkbox"
-                                isCheckboxSelectionBadgeHidden
-                                isOpen={!!this.state.isOpenColumnVisibility}
-                                onSelect={(_, selection) => {
-                                    const s = this.columns.find(itm => itm[1] == selection);
+                                selected={this.state.selectedDate}
+                                options={options}
+                                isScrollable
+                                toggleProps={{
+                                    id: "date-picker-select-toggle",
+                                    className: "select-min metrics-label",
+                                    "aria-label": _("Jump to")
+                                }} />
+                            <CheckboxSelect
+                                toggleProps={{
+                                    "aria-label": _("Graph visibility options menu"),
+                                    className: "select-min metrics-label",
+                                }}
+                                toggleContent={_("Graph visibility")}
+                                noBadge
+                                onSelect={(selection, checked) => {
                                     this.setState(prevState => ({
-                                        selectedVisibility: { ...prevState.selectedVisibility, [s[0]]: !prevState.selectedVisibility[s[0]] }
+                                        selectedVisibility: { ...prevState.selectedVisibility, [selection]: checked }
                                     }));
                                 }}
-                                onToggle={() => this.setState({ isOpenColumnVisibility: !this.state.isOpenColumnVisibility })}
-                                placeholderText={_("Graph visibility")}
-                                selections={selections}>
-                                {columnVisibilityMenuItems}
-                            </Select>
+                                selected={selections}
+                                options={columnVisibilityMenuItems} />
                         </Flex>
                         <Stack className="metrics-label-graph-mobile">
                             {[["cpu", _("CPU usage/load")], ["memory", _("Memory usage/swap")], ["disks", _("Disk I/O")], ["network", _("Network")]]
@@ -1969,20 +1952,26 @@ class MetricsHistory extends React.Component {
                         </div>
                     </section>
                 </PageGroup>
-                <PageSection className="metrics-history-section" variant={PageSectionVariants.light}>
+                <PageSection hasBodyWrapper={false} className="metrics-history-section">
                     <>
                         { this.state.hours.length > 0 &&
                         <Card isPlain>
                             <CardBody className="metrics-history">
                                 { this.state.hours.map((time, i) => {
+                                    const date_time = new Date(time);
+                                    const boot_minutes = this.state.boots.filter(reboot => reboot.started.getDay() === date_time.getDay() &&
+                                                                                           reboot.started.getYear() === date_time.getYear() &&
+                                                                                           reboot.started.getHours() === date_time.getHours())
+                                            .map(reboot => reboot.started.getMinutes());
                                     const showHeader = i == 0 || timeformat.date(time) != timeformat.date(this.state.hours[i - 1]);
 
                                     return (
                                         <React.Fragment key={timeformat.dateTime(time)}>
-                                            {showHeader && <TextContent><Text component={TextVariants.h3} className="metrics-time"><time>{ timeformat.date(time) }</time></Text></TextContent>}
+                                            {showHeader && <Content><Content component={ContentVariants.h3} className="metrics-time"><time>{ timeformat.date(time) }</time></Content></Content>}
                                             <MetricsHour key={time} startTime={parseInt(time)}
                                                          selectedVisibility={this.state.selectedVisibility}
-                                                         data={this.data[time]} clipLeading={i == 0} />
+                                                         data={this.data[time]} clipLeading={i == 0}
+                                                         boots={boot_minutes} />
                                         </React.Fragment>
                                     );
                                 })}
@@ -2003,36 +1992,34 @@ class MetricsHistory extends React.Component {
 
 export const Application = () => {
     const [firewalldRequest, setFirewalldRequest] = useState(null);
-    const [needsLogout, setNeedsLogout] = useState(false);
 
     return (
         <WithDialogs>
-            <Page additionalGroupedContent={
-                <PageSection id="metrics-header-section" variant={PageSectionVariants.light} type='breadcrumb'>
+            <Page className='no-masthead-sidebar'>
+                <PageBreadcrumb
+                    id='metrics-header-section'
+                    hasBodyWrapper={false}
+                    stickyOnBreakpoint={{ default: "top" }}
+                >
                     <Flex>
                         <FlexItem>
                             <Breadcrumb>
-                                <BreadcrumbItem onClick={() => cockpit.jump("/system")} className="pf-v5-c-breadcrumb__link">{_("Overview")}</BreadcrumbItem>
+                                <BreadcrumbItem onClick={() => cockpit.jump("/system")} className="pf-v6-c-breadcrumb__link">{_("Overview")}</BreadcrumbItem>
                                 <BreadcrumbItem isActive>{_("Metrics and history")}</BreadcrumbItem>
                             </Breadcrumb>
                         </FlexItem>
                         <FlexItem align={{ default: 'alignRight' }}>
                             <PCPConfig buttonVariant="secondary"
-                                             firewalldRequest={setFirewalldRequest}
-                                             needsLogout={needsLogout}
-                                             setNeedsLogout={setNeedsLogout} />
+                                             firewalldRequest={setFirewalldRequest} />
                         </FlexItem>
                     </Flex>
-                </PageSection>
-            }>
+                </PageBreadcrumb>
                 { firewalldRequest &&
                 <FirewalldRequest service={firewalldRequest.service} title={firewalldRequest.title} pageSection /> }
-                <PageSection>
+                <PageSection hasBodyWrapper={false}>
                     <CurrentMetrics />
                 </PageSection>
-                <MetricsHistory firewalldRequest={setFirewalldRequest}
-                                needsLogout={needsLogout}
-                                setNeedsLogout={setNeedsLogout} />
+                <MetricsHistory firewalldRequest={setFirewalldRequest} />
             </Page>
         </WithDialogs>);
 };

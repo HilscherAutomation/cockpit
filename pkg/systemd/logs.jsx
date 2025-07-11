@@ -17,7 +17,7 @@
  * along with Cockpit; If not, see <https://www.gnu.org/licenses/>.
  */
 
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
 import 'cockpit-dark-theme'; // once per page
 
 import cockpit from "cockpit";
@@ -26,11 +26,9 @@ import { createRoot } from 'react-dom/client';
 
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
 import { ClipboardCopy } from "@patternfly/react-core/dist/esm/components/ClipboardCopy/index.js";
-import { Divider } from "@patternfly/react-core/dist/esm/components/Divider/index.js";
-import { Page, PageSection, PageSectionVariants } from "@patternfly/react-core/dist/esm/components/Page/index.js";
+import { Page, PageSection, } from "@patternfly/react-core/dist/esm/components/Page/index.js";
 import { Popover } from "@patternfly/react-core/dist/esm/components/Popover/index.js";
 import { SearchInput } from "@patternfly/react-core/dist/esm/components/SearchInput/index.js";
-import { Select, SelectOption } from "@patternfly/react-core/dist/esm/deprecated/components/Select/index.js";
 import { Stack } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
 import { Toolbar, ToolbarContent, ToolbarGroup, ToolbarItem, ToolbarToggleGroup } from "@patternfly/react-core/dist/esm/components/Toolbar/index.js";
 import {
@@ -38,6 +36,9 @@ import {
     FilterIcon,
     HelpIcon,
 } from '@patternfly/react-icons';
+
+import { SimpleSelect } from "cockpit-components-simple-select";
+import { TypeaheadSelect } from "cockpit-components-typeahead-select";
 
 import {
     checkJournalctlGrep,
@@ -54,36 +55,37 @@ import "./logs.scss";
 const _ = cockpit.gettext;
 
 const timeFilterOptions = [
-    { key: "boot", value: 0, toString: () => _("Current boot"), },
-    { key: "boot", value: "-1", toString: () => _("Previous boot") },
-    { key: "since", value: "-24hours", toString: () => _("Last 24 hours"), default: true },
-    { key: "since", value: "-7days", toString: () => _("Last 7 days") },
+    { key: 1, value: { key: "boot", value: 0 }, content: _("Current boot") },
+    { key: 2, value: { key: "boot", value: "-1" }, content: _("Previous boot") },
+    { key: 3, value: { key: "since", value: "-24hours", default: true }, content: _("Last 24 hours") },
+    { key: 4, value: { key: "since", value: "-7days" }, content: _("Last 7 days") },
 ];
 
 const journalPrioOptions = [
-    { value: "emerg", toString: () => _("Only emergency") },
-    { value: "alert", toString: () => _("Alert and above") },
-    { value: "crit", toString: () => _("Critical and above") },
-    { value: "err", toString: () => _("Error and above") },
-    { value: "warning", toString: () => _("Warning and above") },
-    { value: "notice", toString: () => _("Notice and above") },
-    { value: "info", toString: () => _("Info and above") },
-    { value: "debug", toString: () => _("Debug and above") },
+    { value: "emerg", content: _("Only emergency") },
+    { value: "alert", content: _("Alert and above") },
+    { value: "crit", content: _("Critical and above") },
+    { value: "err", content: _("Error and above") },
+    { value: "warning", content: _("Warning and above") },
+    { value: "notice", content: _("Notice and above") },
+    { value: "info", content: _("Info and above") },
+    { value: "debug", content: _("Debug and above") },
 ];
 
 const getPrioFilterOption = options => {
-    if (options.priority || options.prio)
-        return journalPrioOptions.find(option => option.value == options.priority || option.value == options.prio);
-
-    return journalPrioOptions.find(option => option.value == "err");
+    // `prio` is a legacy name. Accept it, but don't generate it
+    return options.priority || options.prio;
 };
 
 const getTimeFilterOption = options => {
+    function find_key(key, value) {
+        return timeFilterOptions.find(o => o.value.key == key && o.value.value == value)?.value;
+    }
     if (options.boot)
-        return timeFilterOptions.find(option => option.key == 'boot' && option.value == options.boot);
+        return find_key('boot', options.boot);
     else if (options.since)
-        return timeFilterOptions.find(option => option.key == 'since' && option.value == options.since);
-    return timeFilterOptions.find(option => 'default' in option); // Use the default key
+        return find_key('since', options.since);
+    return timeFilterOptions.find(option => 'default' in option.value)?.value; // Use the default key
 };
 
 export const LogsPage = () => {
@@ -103,11 +105,8 @@ export const LogsPage = () => {
     const [currentIdentifiers, setCurrentIdentifiers] = useState(undefined);
     const [dataFollowing, setDataFollowing] = useState(follow);
     const [filteredQuery, setFilteredQuery] = useState(undefined);
-    const [isOpenPrioFilter, setIsOpenPrioFilter] = useState(false);
-    const [isOpenTimeFilter, setIsOpenTimeFilter] = useState(false);
-    // `prio` is a legacy name. Accept it, but don't generate it
     const [journalPrio, setJournalPrio] = useState(getPrioFilterOption(options));
-    const [identifiersFilter, setIdentifiersFilter] = useState(options.tag || _("All"));
+    const [identifiersFilter, setIdentifiersFilter] = useState(options.tag || "all");
     const [showTextSearch, setShowTextSearch] = useState(false);
     const [textFilter, setTextFilter] = useState(full_grep);
     const [timeFilter, setTimeFilter] = useState(getTimeFilterOption(options));
@@ -123,7 +122,7 @@ export const LogsPage = () => {
             if (path.length == 1) return;
 
             setJournalPrio(getPrioFilterOption(options));
-            setIdentifiersFilter(options.tag || _("All"));
+            setIdentifiersFilter(options.tag || "all");
             setTextFilter(full_grep);
             setTimeFilter(getTimeFilterOption(options));
         }
@@ -152,7 +151,7 @@ export const LogsPage = () => {
     const onIdentifiersFilterChange = (value) => {
         setUpdateIdentifiersList(false);
 
-        if (value == _("All")) {
+        if (value == "all") {
             delete options.tag;
             updateUrl(Object.assign(options));
         } else {
@@ -182,41 +181,31 @@ export const LogsPage = () => {
     };
 
     return (
-        <Page>
-            <PageSection id="journal" className="journal-filters" padding={{ default: 'noPadding' }}>
-                <Toolbar>
+        <Page className='no-masthead-sidebar'>
+            <PageSection hasBodyWrapper={false} id="journal" className="journal-filters">
+                <Toolbar hasNoPadding>
                     <ToolbarContent>
-                        <ToolbarToggleGroup className="pf-v5-u-flex-wrap pf-v5-u-flex-grow-1 pf-v5-u-align-items-flex-start" toggleIcon={<><span className="pf-v5-c-button__icon pf-m-start"><FilterIcon /></span>{_("Toggle filters")}</>} breakpoint="lg">
+                        <ToolbarToggleGroup className="pf-v6-u-flex-wrap pf-v6-u-flex-grow-1 pf-v6-u-align-items-flex-start" toggleIcon={<><span className="pf-v6-c-button__icon pf-m-start"><FilterIcon /></span>{_("Toggle filters")}</>} breakpoint="lg">
                             <ToolbarGroup>
                                 <ToolbarItem>
-                                    <Select toggleId="logs-predefined-filters"
-                                            isOpen={isOpenTimeFilter}
-                                            onToggle={(_, isOpen) => setIsOpenTimeFilter(isOpen)}
-                                            onSelect={(e, selection) => {
-                                                setIsOpenTimeFilter(false);
-                                                onTimeFilterChange(selection);
-                                            }}
-                                            selections={timeFilter}
-                                            placeholderText={_("Time")}>
-                                        {timeFilterOptions.map(option => <SelectOption key={option.value}
-                                                                                       value={option} />)}
-                                    </Select>
+                                    <SimpleSelect
+                                        toggleProps={{ id: "logs-predefined-filters" }}
+                                        placeholder={_("Time")}
+                                        onSelect={onTimeFilterChange}
+                                        options={timeFilterOptions}
+                                        selected={timeFilter} />
                                 </ToolbarItem>
 
                                 <ToolbarItem variant="label">
                                     {_("Priority")}
                                 </ToolbarItem>
                                 <ToolbarItem>
-                                    <Select toggleId="journal-prio-menu"
-                                            isOpen={isOpenPrioFilter}
-                                            onToggle={(_, isOpen) => setIsOpenPrioFilter(isOpen)}
-                                            onSelect={(e, selection) => {
-                                                setIsOpenPrioFilter(false);
-                                                onJournalPrioChange(selection.value);
-                                            }}
-                                            selections={journalPrio}>
-                                        {journalPrioOptions.map(option => <SelectOption key={option.value} value={option} />)}
-                                    </Select>
+                                    <SimpleSelect
+                                        toggleProps={{ id: "journal-prio-menu" }}
+                                        placeholder={_("Priority")}
+                                        onSelect={onJournalPrioChange}
+                                        options={journalPrioOptions}
+                                        selected={journalPrio} />
                                 </ToolbarItem>
 
                                 <ToolbarItem variant="label">
@@ -269,8 +258,7 @@ export const LogsPage = () => {
                 </Toolbar>
 
             </PageSection>
-            <PageSection padding={{ default: 'noPadding' }}
-                         variant={PageSectionVariants.light}
+            <PageSection hasBodyWrapper={false}
                          id="journal-box"
                          className="journal-filters-box">
                 <JournalBox dataFollowing={dataFollowing}
@@ -286,46 +274,33 @@ export const LogsPage = () => {
 };
 
 const IdentifiersFilter = ({ identifiersFilter, onIdentifiersFilterChange, currentIdentifiers }) => {
-    const [isOpenIdentifiersFilter, setIsOpenIdentifiersFilter] = useState(false);
-
     let identifiersArray;
     if (currentIdentifiers !== undefined) {
         identifiersArray = [
-            <SelectOption key="all" value={_("All")} />
+            { value: "all", content: _("All") }
         ];
         if (currentIdentifiers.length > 0) {
-            identifiersArray.push(<Divider component="li" key="divider" />);
+            identifiersArray.push({ decorator: "divider", key: "divider" });
         }
         identifiersArray = identifiersArray.concat(
             currentIdentifiers
                     .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
-                    .map(unit => <SelectOption key={unit} value={unit} />)
+                    .map(unit => ({ value: unit, content: unit }))
         );
     } else {
         identifiersArray = [
-            <SelectOption key={identifiersFilter} value={identifiersFilter} isDisabled />
+            { value: identifiersFilter, content: identifiersFilter, isDisabled: true }
         ];
     }
 
-    /* The noResultsFoundText is not shown because of https://github.com/patternfly/patternfly-react/issues/6005 */
     return (
-        <Select {...(currentIdentifiers === undefined && { loadingVariant: 'spinner' })}
-                onToggle={(_, isOpen) => setIsOpenIdentifiersFilter(isOpen)}
-                onSelect={(e, selection) => {
-                    setIsOpenIdentifiersFilter(false);
-                    onIdentifiersFilterChange(selection);
-                }}
-                isOpen={isOpenIdentifiersFilter}
-                noResultsFoundText={_("No results found")}
-                onClear={() => {
-                    setIsOpenIdentifiersFilter(false);
-                    onIdentifiersFilterChange(_("All"));
-                }}
-                selections={identifiersFilter}
-                typeAheadAriaLabel={_("Select a identifier")}
-                variant="typeahead">
-            {identifiersArray}
-        </Select>
+        <TypeaheadSelect selectOptions={identifiersArray}
+                         isScrollable
+                         selected={identifiersFilter}
+                         selectedIsTrusted
+                         onSelect={(e, selection) => { onIdentifiersFilterChange(selection) }}
+                         onClearSelection={identifiersFilter != "all" && (() => { onIdentifiersFilterChange("all") })}
+        />
     );
 };
 
@@ -373,7 +348,7 @@ const TextFilter = ({ textFilter, onTextFilterChange, filteredQuery }) => {
         <>
             {_("Unit")}
             <Popover headerContent={_("Show messages for the specified systemd unit.")}
-                     bodyContent={_("This will add match for '_SYSTEMD_UNIT=', 'COREDUMP_UNIT=' and 'UNIT=' to find all possible messages for the given unit. Can contain more units separated by comma. ")}>
+                     bodyContent={_("This will add match for '_SYSTEMD_UNIT=', 'COREDUMP_UNIT=' and 'UNIT=' to find all possible messages for the given unit. Can contain more units separated by comma.")}>
                 <Button className="log-text-filter-popover-button" variant="plain">
                     <HelpIcon />
                 </Button>

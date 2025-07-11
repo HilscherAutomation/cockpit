@@ -27,8 +27,8 @@ fi
 # our tests, and only causes trouble; https://github.com/amazonlinux/amazon-ec2-utils/issues/37
 if rpm -q amazon-ec2-utils; then
     rpm -e --verbose amazon-ec2-utils
-    # clean up the symlinks
-    udevadm trigger /dev/nvme*
+    # clean up the symlinks, if they exist
+    udevadm trigger /dev/nvme* || true
 fi
 
 if grep -q 'ID=.*fedora' /etc/os-release && [ "$PLAN" = "main" ]; then
@@ -37,11 +37,6 @@ if grep -q 'ID=.*fedora' /etc/os-release && [ "$PLAN" = "main" ]; then
     dnf install -y tcsh
     # required by TestTeam
     dnf install -y NetworkManager-team
-fi
-
-if grep -q 'platform:f40' /etc/os-release; then
-    # required by TestJournal.testAbrt*
-    dnf install -y abrt abrt-addon-ccpp reportd libreport-plugin-bugzilla libreport-fedora
 fi
 
 if grep -q 'ID=.*fedora' /etc/os-release && [ "$PLAN" = "storage-basic" ]; then

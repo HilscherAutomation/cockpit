@@ -29,7 +29,9 @@ import { Checkbox } from "@patternfly/react-core/dist/esm/components/Checkbox/in
 import { ClipboardCopy } from "@patternfly/react-core/dist/esm/components/ClipboardCopy/index.js";
 import { ExpandableSection } from "@patternfly/react-core/dist/esm/components/ExpandableSection/index.js";
 import { Form, FormGroup } from "@patternfly/react-core/dist/esm/components/Form/index.js";
-import { Modal } from "@patternfly/react-core/dist/esm/components/Modal/index.js";
+import {
+    Modal, ModalBody, ModalFooter, ModalHeader
+} from '@patternfly/react-core/dist/esm/components/Modal/index.js';
 import { Popover } from "@patternfly/react-core/dist/esm/components/Popover/index.js";
 import { Radio } from "@patternfly/react-core/dist/esm/components/Radio/index.js";
 import { Stack } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
@@ -130,10 +132,10 @@ const UnknownHostDialog = ({ host, error, dialogResult }: {
         body = <>
             <Alert variant='danger' isInline title={_("Changed keys are often the result of an operating system reinstallation. However, an unexpected change may indicate a third-party attempt to intercept your connection.")} />
             <p>{_("To ensure that your connection is not intercepted by a malicious third-party, please verify the host key fingerprint:")}</p>
-            <ClipboardCopy isReadOnly hoverTip={_("Copy")} clickTip={_("Copied")} className="hostkey-fingerprint pf-v5-u-font-family-monospace">{host_fp}</ClipboardCopy>
+            <ClipboardCopy isReadOnly hoverTip={_("Copy")} clickTip={_("Copied")} className="hostkey-fingerprint pf-v6-u-font-family-monospace">{host_fp}</ClipboardCopy>
             <p className="hostkey-type">({key_type})</p>
             <p>{cockpit.format(_("To verify a fingerprint, run the following on $0 while physically sitting at the machine or through a trusted network:"), address.address)}</p>
-            <ClipboardCopy isReadOnly hoverTip={_("Copy")} clickTip={_("Copied")} className="hostkey-verify-help-cmds pf-v5-u-font-family-monospace">{scan_cmd}</ClipboardCopy>
+            <ClipboardCopy isReadOnly hoverTip={_("Copy")} clickTip={_("Copied")} className="hostkey-verify-help-cmds pf-v6-u-font-family-monospace">{scan_cmd}</ClipboardCopy>
             <p>{_("The resulting fingerprint is fine to share via public methods, including email.")}</p>
             <p>{_("If the fingerprint matches, click 'Trust and add host'. Otherwise, do not connect and contact your administrator.")}</p>
         </>;
@@ -148,9 +150,9 @@ const UnknownHostDialog = ({ host, error, dialogResult }: {
                                 isExpanded={verifyExpanded}
                                 onToggle={(_ev, value) => setVerifyExpanded(value) }>
                 <div>{_("Run this command over a trusted network or physically on the remote machine:")}</div>
-                <ClipboardCopy isReadOnly hoverTip={_("Copy")} clickTip={_("Copied")} className="hostkey-verify-help hostkey-verify-help-cmds pf-v5-u-font-family-monospace">{scan_cmd}</ClipboardCopy>
+                <ClipboardCopy isReadOnly hoverTip={_("Copy")} clickTip={_("Copied")} className="hostkey-verify-help hostkey-verify-help-cmds pf-v6-u-font-family-monospace">{scan_cmd}</ClipboardCopy>
                 <div>{_("The fingerprint should match:")} {fingerprint_help}</div>
-                <ClipboardCopy isReadOnly hoverTip={_("Copy")} clickTip={_("Copied")} className="hostkey-verify-help hostkey-fingerprint pf-v5-u-font-family-monospace">{host_fp}</ClipboardCopy>
+                <ClipboardCopy isReadOnly hoverTip={_("Copy")} clickTip={_("Copied")} className="hostkey-verify-help hostkey-fingerprint pf-v6-u-font-family-monospace">{host_fp}</ClipboardCopy>
             </ExpandableSection>
         </>;
     }
@@ -171,20 +173,22 @@ const UnknownHostDialog = ({ host, error, dialogResult }: {
         <Modal id="ssh-unknown-host-dialog" isOpen
                 position="top" variant="medium"
                 onClose={() => dialogResult.reject("cancel")}
-                title={title}
-                footer={<>
-                    <Button variant="primary" onClick={onAddKey} isLoading={inProgress} isDisabled={inProgress}>
-                        { submitText }
-                    </Button>
-                    <Button variant="link" className="btn-cancel" onClick={() => dialogResult.reject("cancel")}>
-                        { _("Cancel") }
-                    </Button>
-                </>}
         >
-            <Stack hasGutter>
-                { dialogError && <ModalError dialogError={dialogError} />}
-                {body}
-            </Stack>
+            <ModalHeader title={title} />
+            <ModalBody>
+                <Stack hasGutter>
+                    { dialogError && <ModalError dialogError={dialogError} />}
+                    {body}
+                </Stack>
+            </ModalBody>
+            <ModalFooter>
+                <Button variant="primary" onClick={onAddKey} isLoading={inProgress} isDisabled={inProgress}>
+                    { submitText }
+                </Button>
+                <Button variant="link" className="btn-cancel" onClick={() => dialogResult.reject("cancel")}>
+                    { _("Cancel") }
+                </Button>
+            </ModalFooter>
         </Modal>
     );
 };
@@ -241,9 +245,9 @@ class ChangeAuthDialog extends React.Component<ChangeAuthProps, ChangeAuthState>
     keys() {
         // @ts-expect-error: "property does not exist", yes TS, that's why we add it here..
         if (!this.__keys)
-            // @ts-expect-error: dito
+            // @ts-expect-error: ditto
             this.__keys = credentials.keys_instance();
-        // @ts-expect-error: dito
+        // @ts-expect-error: ditto
         return this.__keys;
     }
 
@@ -276,8 +280,8 @@ class ChangeAuthDialog extends React.Component<ChangeAuthProps, ChangeAuthState>
 
             return this.setState({ in_progress: false, default_ssh_key, user }, this.updateIdentity);
         } catch (ex) { // not-covered: OS error
-            const dialogError = (ex as cockpit.BasicError).toString(); // not-covered: dito
-            this.setState({ in_progress: false, dialogError }); // not-covered: dito
+            const dialogError = (ex as cockpit.BasicError).toString(); // not-covered: ditto
+            this.setState({ in_progress: false, dialogError }); // not-covered: ditto
         }
     }
 
@@ -481,21 +485,23 @@ class ChangeAuthDialog extends React.Component<ChangeAuthProps, ChangeAuthState>
             <Modal id="ssh-change-auth-dialog" isOpen
                    position="top" variant="medium"
                    onClose={onCancel}
-                   title={title}
-                   footer={<>
-                       <Button variant="primary" onClick={this.login} isLoading={this.state.in_progress}
-                               isDisabled={this.state.in_progress || (!offer_login_password && !offer_key_password) || !this.state.default_ssh_key || !this.props.error}>
-                           { submitText }
-                       </Button>
-                       <Button variant="link" className="btn-cancel" onClick={onCancel}>
-                           { _("Cancel") }
-                       </Button>
-                   </>}
             >
-                <Stack hasGutter>
-                    { this.state.dialogError && <ModalError dialogError={this.state.dialogError} /> }
-                    {body}
-                </Stack>
+                <ModalHeader title={title} />
+                <ModalBody>
+                    <Stack hasGutter>
+                        { this.state.dialogError && <ModalError dialogError={this.state.dialogError} /> }
+                        {body}
+                    </Stack>
+                </ModalBody>
+                <ModalFooter>
+                    <Button variant="primary" onClick={this.login} isLoading={this.state.in_progress}
+                            isDisabled={this.state.in_progress || (!offer_login_password && !offer_key_password) || !this.state.default_ssh_key || !this.props.error}>
+                        { submitText }
+                    </Button>
+                    <Button variant="link" className="btn-cancel" onClick={onCancel}>
+                        { _("Cancel") }
+                    </Button>
+                </ModalFooter>
             </Modal>
         );
     }
@@ -509,16 +515,18 @@ const NotSupportedDialog = ({ host, error, dialogResult }: {
     <Modal id="ssh-not-supported-dialog" isOpen
             position="top" variant="medium"
             onClose={() => dialogResult.reject(error)}
-            title={_("Cockpit is not installed")}
-            footer={
-                <Button variant="link" className="btn-cancel" onClick={() => dialogResult.reject(error)}>
-                    { _("Close") }
-                </Button>
-            }
     >
-        <Stack hasGutter>
-            <p>{cockpit.format(_("A compatible version of Cockpit is not installed on $0."), host)}</p>
-        </Stack>
+        <ModalHeader title={_("Cockpit is not installed")} />
+        <ModalBody>
+            <Stack hasGutter>
+                <p>{cockpit.format(_("A compatible version of Cockpit is not installed on $0."), host)}</p>
+            </Stack>
+        </ModalBody>
+        <ModalFooter>
+            <Button variant="secondary" className="btn-cancel" onClick={() => dialogResult.reject(error)}>
+                { _("Close") }
+            </Button>
+        </ModalFooter>
     </Modal>
 );
 

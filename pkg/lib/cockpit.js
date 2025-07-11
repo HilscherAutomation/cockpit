@@ -26,13 +26,20 @@ import {
 } from './cockpit/_internal/common';
 import { Deferred, later_invoke } from './cockpit/_internal/deferred';
 import { event_mixin } from './cockpit/_internal/event-mixin';
-import { url_root, transport_origin, calculate_application, calculate_url } from './cockpit/_internal/location';
+import { transport_origin, calculate_application, calculate_url } from './cockpit/_internal/location-utils';
+import { Location } from 'cockpit/_internal/location';
 import { ensure_transport, transport_globals } from './cockpit/_internal/transport';
 import { FsInfoClient } from "./cockpit/fsinfo";
+import { fetch_info } from './cockpit/_internal/info';
 
 function factory() {
     const cockpit = { };
     event_mixin(cockpit, { });
+
+    cockpit.init = async () => {
+        await new Promise(resolve => ensure_transport(resolve));
+        Object.assign(cockpit.info, await fetch_info());
+    };
 
     cockpit.channel = function channel(options) {
         return new Channel(options);
@@ -116,18 +123,14 @@ function factory() {
         },
     };
 
-    cockpit.when = function when(value, fulfilled, rejected, updated) {
-        const result = cockpit.defer();
-        result.resolve(value);
-        return result.promise.then(fulfilled, rejected, updated);
-    };
-
     cockpit.resolve = function resolve(result) {
-        return cockpit.defer().resolve(result).promise;
+        console.warn("cockpit.resolve() is deprecated. Use Promise.resolve()");
+        return Promise.resolve(result);
     };
 
     cockpit.reject = function reject(ex) {
-        return cockpit.defer().reject(ex).promise;
+        console.warn("cockpit.reject() is deprecated. Use Promise.reject()");
+        return Promise.reject(ex);
     };
 
     cockpit.defer = function() {
@@ -1063,6 +1066,7 @@ function factory() {
 
     /* Not public API ... yet? */
     cockpit.drop_privileges = function drop_privileges() {
+        console.warn("cockpit.drop_privileges() is deprecated");
         ensure_transport(function(transport) {
             transport.send_control({ command: "logout", disconnect: false });
         });
@@ -1076,8 +1080,10 @@ function factory() {
     event_mixin(cockpit.info, { });
 
     transport_globals.init_callback = function(options) {
-        if (options.system)
+        if (options.system) {
+            cockpit.info.ws = options.system;
             Object.assign(cockpit.info, options.system);
+        }
         if (options.system)
             cockpit.info.dispatchEvent("changed");
 
@@ -1102,6 +1108,7 @@ function factory() {
                             home: user.Home.v,
                             shell: user.Shell.v
                         };
+                        Object.freeze(the_user);
                         return the_user;
                     })
                     .finally(() => dbus.close());
@@ -1123,196 +1130,12 @@ function factory() {
      * Cockpit location
      */
 
-    /* HACK: Mozilla will unescape 'window.location.hash' before returning
-     * it, which is broken.
-     *
-     * https://bugzilla.mozilla.org/show_bug.cgi?id=135309
-     */
-
     let last_loc = null;
-
-    function get_window_location_hash() {
-        return (window.location.href.split('#')[1] || '');
-    }
-
-    function Location() {
-        const self = this;
-        const application = cockpit.transport.application();
-        self.url_root = url_root || "";
-
-        if (window.mock?.url_root)
-            self.url_root = window.mock.url_root;
-
-        if (application.indexOf("cockpit+=") === 0) {
-            if (self.url_root)
-                self.url_root += '/';
-            self.url_root = self.url_root + application.replace("cockpit+", '');
-        }
-
-        const href = get_window_location_hash();
-        const options = { };
-        self.path = decode(href, options);
-
-        /* Resolve dots and double dots */
-        function resolve_path_dots(parts) {
-            const out = [];
-            const length = parts.length;
-            for (let i = 0; i < length; i++) {
-                const part = parts[i];
-                if (part === "" || part == ".") {
-                    continue;
-                } else if (part == "..") {
-                    if (out.length === 0)
-                        return null;
-                    out.pop();
-                } else {
-                    out.push(part);
-                }
-            }
-            return out;
-        }
-
-        function decode_path(input) {
-            const parts = input.split('/').map(decodeURIComponent);
-            let result, i;
-            let pre_parts = [];
-
-            if (self.url_root)
-                pre_parts = self.url_root.split('/').map(decodeURIComponent);
-
-            if (input && input[0] !== "/") {
-                result = [].concat(self.path);
-                result.pop();
-                result = result.concat(parts);
-            } else {
-                result = parts;
-            }
-
-            result = resolve_path_dots(result);
-            for (i = 0; i < pre_parts.length; i++) {
-                if (pre_parts[i] !== result[i])
-                    break;
-            }
-            if (i == pre_parts.length)
-                result.splice(0, pre_parts.length);
-
-            return result;
-        }
-
-        function encode(path, options, with_root) {
-            if (typeof path == "string")
-                path = decode_path(path);
-
-            let href = "/" + path.map(encodeURIComponent).join("/");
-            if (with_root && self.url_root && href.indexOf("/" + self.url_root + "/") !== 0)
-                href = "/" + self.url_root + href;
-
-            /* Undo unnecessary encoding of these */
-            href = href.replaceAll("%40", "@");
-            href = href.replaceAll("%3D", "=");
-            href = href.replaceAll("%2B", "+");
-            href = href.replaceAll("%23", "#");
-
-            let opt;
-            const query = [];
-            function push_option(v) {
-                query.push(encodeURIComponent(opt) + "=" + encodeURIComponent(v));
-            }
-
-            if (options) {
-                for (opt in options) {
-                    let value = options[opt];
-                    if (!Array.isArray(value))
-                        value = [value];
-                    value.forEach(push_option);
-                }
-                if (query.length > 0)
-                    href += "?" + query.join("&");
-            }
-            return href;
-        }
-
-        function decode(href, options) {
-            if (href[0] == '#')
-                href = href.substr(1);
-
-            const pos = href.indexOf('?');
-            const first = (pos === -1) ? href : href.substr(0, pos);
-            const path = decode_path(first);
-            if (pos !== -1 && options) {
-                href.substring(pos + 1).split("&")
-                .forEach(function(opt) {
-                    const parts = opt.split('=');
-                    const name = decodeURIComponent(parts[0]);
-                    const value = decodeURIComponent(parts[1]);
-                    if (options[name]) {
-                        let last = options[name];
-                        if (!Array.isArray(value))
-                            last = options[name] = [last];
-                        last.push(value);
-                    } else {
-                        options[name] = value;
-                    }
-                });
-            }
-
-            return path;
-        }
-
-        function href_for_go_or_replace(/* ... */) {
-            let href;
-            if (arguments.length == 1 && arguments[0] instanceof Location) {
-                href = String(arguments[0]);
-            } else if (typeof arguments[0] == "string") {
-                const options = arguments[1] || { };
-                href = encode(decode(arguments[0], options), options);
-            } else {
-                href = encode.apply(self, arguments);
-            }
-            return href;
-        }
-
-        function replace(/* ... */) {
-            if (self !== last_loc)
-                return;
-            const href = href_for_go_or_replace.apply(self, arguments);
-            window.location.replace(window.location.pathname + '#' + href);
-        }
-
-        function go(/* ... */) {
-            if (self !== last_loc)
-                return;
-            const href = href_for_go_or_replace.apply(self, arguments);
-            window.location.hash = '#' + href;
-        }
-
-        Object.defineProperties(self, {
-            path: {
-                enumerable: true,
-                writable: false,
-                value: self.path
-            },
-            options: {
-                enumerable: true,
-                writable: false,
-                value: options
-            },
-            href: {
-                enumerable: true,
-                value: href
-            },
-            go: { value: go },
-            replace: { value: replace },
-            encode: { value: encode },
-            decode: { value: decode },
-            toString: { value: function() { return href } }
-        });
-    }
 
     Object.defineProperty(cockpit, "location", {
         enumerable: true,
         get: function() {
-            if (!last_loc || last_loc.href !== get_window_location_hash())
+            if (!last_loc || last_loc.href !== window.location.hash.slice(1))
                 last_loc = new Location();
             return last_loc;
         },
@@ -1322,10 +1145,10 @@ function factory() {
     });
 
     window.addEventListener("hashchange", function() {
+        if (last_loc)
+            last_loc.invalidate();
         last_loc = null;
-        let hash = window.location.hash;
-        if (hash.indexOf("#") === 0)
-            hash = hash.substring(1);
+        const hash = window.location.hash.slice(1);
         cockpit.hint("location", { hash });
         cockpit.dispatchEvent("locationchanged");
     });
@@ -1407,7 +1230,7 @@ function factory() {
                 this.message = cockpit.message(options.problem);
             else if (this.exit_signal !== null)
                 this.message = cockpit.format(_("$0 killed with signal $1"), name, this.exit_signal);
-            else if (this.exit_status !== undefined)
+            else if (this.exit_status !== null)
                 this.message = cockpit.format(_("$0 exited with code $1"), name, this.exit_status);
             else
                 this.message = cockpit.format(_("$0 failed"), name);
@@ -1419,6 +1242,8 @@ function factory() {
             return this.message;
         };
     }
+
+    cockpit.ProcessError = ProcessError;
 
     function spawn_debug() {
         if (window.debugging == "all" || window.debugging?.includes("spawn"))
@@ -1734,21 +1559,23 @@ function factory() {
         const self = this;
         event_mixin(self, { });
 
+        self.client = client;
+        self.iface = iface;
+        self.path_namespace = path_namespace;
+
         let waits;
 
+        self.wait = function(func) {
+            if (func)
+                waits.always(func);
+            return waits;
+        };
+
         Object.defineProperties(self, {
-            client: { value: client, enumerable: false, writable: false },
-            iface: { value: iface, enumerable: false, writable: false },
-            path_namespace: { value: path_namespace, enumerable: false, writable: false },
-            wait: {
-                enumerable: false,
-                writable: false,
-                value: function(func) {
-                    if (func)
-                        waits.always(func);
-                    return waits;
-                }
-            }
+            client: { enumerable: false, writable: false },
+            iface: { enumerable: false, writable: false },
+            path_namespace: { enumerable: false, writable: false },
+            wait: { enumerable: false, writable: false },
         });
 
         /* Subscribe to signals once for all proxies */
@@ -2144,6 +1971,7 @@ function factory() {
     };
 
     cockpit.byte_array = function byte_array(string) {
+        console.warn("cockpit.byte_array() is deprecated, use window.btoa");
         return window.btoa(string);
     };
 
@@ -2494,7 +2322,7 @@ function factory() {
             /* The list of things to translate */
             let list = null;
             if (what[w].querySelectorAll)
-                list = what[w].querySelectorAll("[translatable], [translate]");
+                list = what[w].querySelectorAll("[translate]");
             if (!list)
                 continue;
 
@@ -2502,7 +2330,7 @@ function factory() {
             for (let i = 0; i < list.length; i++) {
                 const el = list[i];
 
-                let val = el.getAttribute("translate") || el.getAttribute("translatable") || "yes";
+                let val = el.getAttribute("translate") || "yes";
                 if (val == "no")
                     continue;
 
@@ -2517,7 +2345,6 @@ function factory() {
                 }
 
                 /* Mark this thing as translated */
-                el.removeAttribute("translatable");
                 el.removeAttribute("translate");
             }
         }
@@ -2731,7 +2558,7 @@ function factory() {
                         channel.send(data);
                     });
                 }
-                http_debug("http done");
+                http_debug("http", req.method, req.path, "request sent, channel done");
                 channel.control({ command: "done" });
             }
 
@@ -2778,10 +2605,13 @@ function factory() {
                             if (type.indexOf("text/plain") === 0)
                                 message = body;
                         }
-                        http_debug("http status: ", resp.status);
+                        http_debug("http", req.method, req.path, "failed:", resp.status, resp.reason);
                         dfd.reject(new HttpError(resp.status, resp.reason, message), body);
                     } else {
-                        http_debug("http done");
+                        if (resp)
+                            http_debug("http", req.method, req.path, "succeeded:", resp.status);
+                        else
+                            http_debug("http", req.method, req.path, "failed without response");
                         dfd.resolve(body);
                     }
                 }

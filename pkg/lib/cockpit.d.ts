@@ -17,6 +17,7 @@
  */
 
 import '_internal/common'; // side-effecting import (`window` augmentations)
+import type { Info } from './cockpit/_internal/info';
 
 declare module 'cockpit' {
     type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -28,11 +29,15 @@ declare module 'cockpit' {
         toString(): string;
     }
 
+    function init(): Promise<void>;
+
     function assert(predicate: unknown, message?: string): asserts predicate;
 
     export const manifests: { [package in string]?: JsonObject };
+    export const info: Info;
 
     export let language: string;
+    export let language_direction: string;
 
     interface Transport {
         csrf_token: string;
@@ -43,6 +48,7 @@ declare module 'cockpit' {
         wait(callback: (transport: Transport) => void): void;
         close(problem?: string): void;
         application(): string;
+        control(command: string, options: JsonObject): void;
     }
 
     export const transport: Transport;
@@ -98,6 +104,8 @@ declare module 'cockpit' {
         changed(): void;
     }
 
+    function event_target<T, EM extends EventMap>(obj: T): T & EventSource<EM>;
+
     /* === Channel =============================== */
 
     interface ControlMessage extends JsonObject {
@@ -119,7 +127,7 @@ declare module 'cockpit' {
         valid: boolean;
         send(data: T): void;
         control(options: ControlMessage): void;
-        wait(): Promise<void>;
+        wait(callback?: (data: T) => void): Promise<T>;
         close(options?: string | JsonObject): void;
     }
 
@@ -145,6 +153,13 @@ declare module 'cockpit' {
     function channel(options: ChannelOpenOptions & { binary: true; }): Channel<Uint8Array>;
 
     /* === cockpit.{spawn,script} ============================= */
+
+    class ProcessError {
+        problem: string | null;
+        exit_status: number | null;
+        exit_signal: number | null;
+        message: string;
+    }
 
     interface Spawn<T> extends DeferredPromise<T> {
         input(message?: T | null, stream?: boolean): DeferredPromise<T>;
@@ -186,11 +201,18 @@ declare module 'cockpit' {
         options: { [name: string]: string | Array<string> };
         path: Array<string>;
         href: string;
-        go(path: Location | string, options?: { [key: string]: string }): void;
-        replace(path: Location | string, options?: { [key: string]: string }): void;
+        go(path: Location | string[] | string, options?: { [key: string]: string }): void;
+        replace(path: Location | string[] | string, options?: { [key: string]: string }): void;
+
+        encode(path: string[], options?: { [key: string]: string }, with_root?: boolean): string;
+        decode(string: string, options?: { [key: string]: string }): string[];
     }
 
-    export const location: Location;
+    export let location: Location;
+
+    /* === cockpit.jump ========================== */
+
+    function jump(path: string | string[], host?: string): void;
 
     /* === cockpit page visibility =============== */
 
@@ -202,6 +224,12 @@ declare module 'cockpit' {
         changed(changes: { [property: string]: unknown }): void;
     }
 
+    interface DBusProxiesEvents extends EventMap {
+        added(proxy: DBusProxy): void;
+        changed(proxy: DBusProxy): void;
+        removed(proxy: DBusProxy): void;
+    }
+
     interface DBusProxy extends EventSource<DBusProxyEvents> {
         valid: boolean;
         [property: string]: unknown;
@@ -210,14 +238,44 @@ declare module 'cockpit' {
     interface DBusOptions {
         bus?: string;
         address?: string;
+        host?: string;
         superuser?: "require" | "try";
         track?: boolean;
+    }
+
+    type DBusCallOptions = {
+        flags?: "" | "i",
+        type?: string,
+        timeout?: number,
+    };
+
+    interface DBusProxies extends EventSource<DBusProxiesEvents> {
+        client: DBusClient;
+        iface: string;
+        path_namespace: string;
+        wait(callback?: () => void): Promise<void>;
     }
 
     interface DBusClient {
         readonly unique_name: string;
         readonly options: DBusOptions;
-        proxy(interface: string, path: string, options?: { watch?: boolean }): DBusProxy;
+        proxy(interface?: string, path?: string, options?: { watch?: boolean }): DBusProxy;
+        proxies(interface?: string, path_namespace?: string, options?: { watch?: boolean }): DBusProxies;
+        call(path: string, iface: string, method: string, args?: unknown[] | null, options?: DBusCallOptions): Promise<unknown[]>;
+        watch(path: string): DeferredPromise<void>,
+        subscribe: (
+            match: {
+                path?: string,
+                path_namespace?: string,
+                interface?: string,
+                member?: string,
+                arg?: string
+            },
+            callback: (path: string, iface: string, signal: string, args: unknown[]) => void,
+            rule?: boolean,
+        ) => {
+            remove: () => void;
+        },
         close(): void;
     }
 
@@ -236,7 +294,7 @@ declare module 'cockpit' {
 
     interface FileSyntaxObject<T, B> {
         parse(content: B): T;
-        stringify(content: T): B;
+        stringify?(content: T): B;
     }
 
     type FileTag = string;
@@ -247,10 +305,12 @@ declare module 'cockpit' {
     }
 
     interface FileHandle<T> {
+        // BUG: This should be Promise<T, FileTag>, but this isn't representable (it's a cockpit.defer underneath)
         read(): Promise<T>;
         replace(new_content: T | null, expected_tag?: FileTag): Promise<FileTag>;
         watch(callback: FileWatchCallback<T>, options?: { read?: boolean }): FileWatchHandle;
-        modify(callback: (data: T | null) => T | null, initial_content?: string, initial_tag?: FileTag): Promise<[T, FileTag]>;
+        // BUG: same as read
+        modify(callback: (data: T | null) => T | null, initial_content?: string, initial_tag?: FileTag): Promise<T>;
         close(): void;
         path: string;
     }
@@ -262,11 +322,11 @@ declare module 'cockpit' {
 
     function file(
         path: string,
-        options?: FileOpenOptions & { binary?: false; syntax?: undefined; }
+        options?: FileOpenOptions & { binary?: false; syntax?: never; }
     ): FileHandle<string>;
     function file(
         path: string,
-        options: FileOpenOptions & { binary: true; syntax?: undefined; }
+        options: FileOpenOptions & { binary: true; syntax?: never; }
     ): FileHandle<Uint8Array>;
     function file<T>(
         path: string,
@@ -288,7 +348,7 @@ declare module 'cockpit' {
         home: string;
         shell: string;
     };
-    export function user(): Promise<UserInfo>;
+    /** @deprecated */ export function user(): Promise<Readonly<UserInfo>>;
 
     /* === String helpers ======================== */
 
@@ -324,4 +384,7 @@ declare module 'cockpit' {
 
     /* === Session ====================== */
     function logout(reload: boolean, reason?: string): void;
+
+    export let localStorage: Storage;
+    export let sessionStorage: Storage;
 }

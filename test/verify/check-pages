@@ -71,11 +71,6 @@ class TestPages(testlib.MachineCase):
         m = self.machine
         b = self.browser
 
-        # HACK: somehow the "services" preload causes a race condition and injects some spurious `window.hashchange /`
-        # event when switching between pages, losing the "on details page" state
-        # see debugging history in https://github.com/cockpit-project/cockpit/pull/18766
-        self.disable_preload("systemd")
-
         self.restore_dir("/etc/systemd/system", post_restore_action="systemctl daemon-reload")
         self.addCleanup(m.execute, "systemctl stop test.timer test.service")
         m.write("/etc/systemd/system/test.service",
@@ -132,6 +127,11 @@ OnCalendar=daily
         b.go("/network")
         self.checkDocs(["Managing networking bonds", "Managing networking teams",
                         "Managing networking bridges", "Managing VLANs", "Managing firewall"])
+        b.go("/system")
+        self.checkDocs(["Configuring system settings"])
+        b.go("/network/firewall")
+        self.checkDocs(["Managing networking bonds", "Managing networking teams",
+                        "Managing networking bridges", "Managing VLANs", "Managing firewall"])
         b.go("/system/services")
 
         m.restart_cockpit()
@@ -144,7 +144,7 @@ OnCalendar=daily
         b.switch_to_top()
         self.checkDocs(["Configuring system settings"])
         b.click_system_menu("/system/services")
-        b.wait_visible("ol.pf-v5-c-breadcrumb__list")
+        b.wait_visible("ol.pf-v6-c-breadcrumb__list")
         b.wait_text(".service-name", "Test Service")
         b.switch_to_top()
         b.wait_js_cond('window.location.pathname === "/system/services"')
@@ -191,6 +191,10 @@ OnCalendar=daily
         b.click("#display-language-modal footer button.pf-m-primary")
         b.wait_language("de-de")
 
+        # Wait for the shell to be fully loaded again so that b.go()
+        # starts working.
+        b.enter_page("/metrics")
+
         # Check that the system page is translated
         b.go("/system")
         b.enter_page("/system")
@@ -213,7 +217,7 @@ OnCalendar=daily
         # TestSystemInfo.testHardwareInfo does this more carefully
         b.go("/system/hwinfo")
         b.enter_page("/system/hwinfo")
-        b.wait_in_text('#hwinfo-system-info-list .hwinfo-system-info-list-item:nth-of-type(2) .pf-v5-c-description-list__group:nth-of-type(3) dd', " 20")
+        b.wait_in_text('#hwinfo-system-info-list .hwinfo-system-info-list-item:nth-of-type(2) .pf-v6-c-description-list__group:nth-of-type(3) dd', " 20")
 
         # Check the playground page
         b.switch_to_top()
@@ -225,10 +229,6 @@ OnCalendar=daily
         self.assertEqual(b.text("#translate-html"), "Bereit")
         self.assertEqual(b.text("#translate-html-context"), "Bereiten")
         self.assertEqual(b.text("#translate-html-yes"), "Nicht bereit")
-        self.assertEqual(b.attr("#translate-html-title", "title"), u"Nicht verfügbar")
-        self.assertEqual(b.text("#translate-html-title"), "Cancel")
-        self.assertEqual(b.attr("#translate-html-yes-title", "title"), u"Nicht verfügbar")
-        self.assertEqual(b.text("#translate-html-yes-title"), "Abbrechen")
 
         # Glade section
         self.assertEqual(b.text("#translatable-glade"), "Leer")
@@ -254,8 +254,6 @@ OnCalendar=daily
         b.wait_visible('#password-group')
         b.wait_text("#password-group > label", "Passwort")
 
-    # FIXME: Works with TEST_SHOW_BROWSER; not obvious what happens
-    @testlib.skipBrowser("Headless chromium spontaneously logs out", "chromium")
     def testAllLanguages(self):
         # Test that pages do not oops
         m = self.machine
@@ -366,10 +364,6 @@ OnCalendar=daily
         self.assertEqual(b.text('#translate-html'), 'Pronto')
         self.assertEqual(b.text('#translate-html-context'), 'Pronto')
         self.assertEqual(b.text('#translate-html-yes'), u'Não está pronto')
-        self.assertEqual(b.attr('#translate-html-title', 'title'), u'Indisponível')
-        self.assertEqual(b.text('#translate-html-title'), 'Cancel')
-        self.assertEqual(b.attr('#translate-html-yes-title', 'title'), u'Indisponível')
-        self.assertEqual(b.text('#translate-html-yes-title'), 'Cancelar')
 
         # Glade section
         self.assertEqual(b.text('#translatable-glade'), 'Vazio')
@@ -395,26 +389,34 @@ OnCalendar=daily
 
     def testFrameReload(self):
         b = self.browser
+        m = self.machine
+
         frame = "cockpit1:localhost/playground/test"
         self.addCleanup(self.machine.execute, "rm -f /tmp/counter")
 
         self.login_and_go("/playground/test")
 
-        b.wait_text('#file-content', "0")
-        b.click("#modify-file")
-        b.wait_text('#file-content', "1")
+        # Check that channels are closed when a frame is reloaded.
 
+        # Lock a file, that keeps a channel open.
+        m.execute("touch /tmp/playground-test-lock")
+        b.click(".lock-channel button")
+        b.wait_in_text(".lock-channel span", 'locked')
+        m.execute("! flock --nonblock /tmp/playground-test-lock true")
+
+        # Now reload the frame by kicking its "src" attribute.
         b.switch_to_top()
-        b.eval_js('ph_set_attr("iframe[name=\'%s\']", "data-ready", null)' % frame)
         b.eval_js('ph_set_attr("iframe[name=\'%s\']", "src", "../playground/test.html?i=1#/")' % frame)
-        b.wait_visible(f"iframe.container-frame[name='{frame}'][data-ready]")
+
+        # The channel and the lock should have gone away
+        m.execute("flock --timeout 10 /tmp/playground-test-lock true")
 
         b.enter_page("/playground/test")
-
-        b.wait_text('#file-content', "1")
+        b.wait_not_in_text(".lock-channel span", 'locked')
 
         self.allow_restart_journal_messages()
 
+    @testlib.skipBeiboot("no local overrides/config in beiboot mode")
     def testShellReload(self):
         b = self.browser
         m = self.machine
@@ -435,12 +437,9 @@ OnCalendar=daily
         # On Ubuntu and Debian we would need to generate locales - just ignore it
         self.allow_journal_messages("invalid or unusable locale: de_DE.UTF-8")
 
-        # Clean up failed services for screenshots
-        m.execute("systemctl reset-failed")
-
         self.login_and_go()
 
-        filter_sel = ".pf-v5-c-text-input-group__text-input"
+        filter_sel = ".pf-v6-c-text-input-group__text-input"
 
         # Check that some page disappears and some stay
         b.focus(filter_sel)
@@ -469,7 +468,10 @@ OnCalendar=daily
         b.wait_text("#host-apps li a:contains('Services')", "ServicesContains: systemd")
         b.wait_text("#host-apps li a:contains('Services') mark", "systemd")
 
+        # Clean up failed services for screenshots
+        m.execute("systemctl reset-failed")
         b.wait_not_present("#services-error")
+
         b.assert_pixels("#nav-system", "menu-search", skip_layouts=["mobile"])
         b.set_layout("mobile")
         b.click("#nav-system-item")
@@ -542,6 +544,11 @@ OnCalendar=daily
         b.click('#display-language-modal li[data-value=de-de] button')
         b.click("#display-language-modal footer button.pf-m-primary")
         b.wait_language("de-de")
+
+        # Wait for the shell to be fully loaded again so that b.go()
+        # starts working.
+        b.enter_page("/network/firewall")
+
         b.go("/system")
         b.enter_page("/system")
         b.wait_in_text(".ct-overview-header", "Neustart")
@@ -593,40 +600,40 @@ OnCalendar=daily
         b.focus("#demo-file-ac input[type=text]")
         b.input_text(stuff + "/")
         # need to wait for the widget's "fast typing" inhibition delay to trigger the completion popup
-        b.wait_in_text("#file-autocomplete-widget li:nth-of-type(1) button", stuff + "/")
-        b.wait_in_text("#file-autocomplete-widget li:nth-of-type(2) button", "dir/")
-        b.wait_in_text("#file-autocomplete-widget li:nth-of-type(3) button", "dir1/")
-        b.wait_in_text("#file-autocomplete-widget li:nth-of-type(4) button", "file1.txt")
-        b.click("#file-autocomplete-widget li:nth-of-type(2) button")
+        b.wait_in_text(".pf-v6-c-menu li:nth-of-type(1) button", stuff + "/")
+        b.wait_in_text(".pf-v6-c-menu li:nth-of-type(2) button", "dir/")
+        b.wait_in_text(".pf-v6-c-menu li:nth-of-type(3) button", "dir1/")
+        b.wait_in_text(".pf-v6-c-menu li:nth-of-type(4) button", "file1.txt")
+        b.click(".pf-v6-c-menu li:nth-of-type(2) button")
 
         # clear the file completion widget
         b.click("#demo-file-ac div:first-of-type div:first-of-type button:nth-of-type(1)")
         # test if input matches one entry, but is the prefix of other entry, widget should not descend into directory
         b.focus("#demo-file-ac input[type=text]")
         b.input_text(stuff + "/dir")
-        b.wait_in_text("#file-autocomplete-widget li:nth-of-type(1) button", stuff + "/dir")
-        b.wait_in_text("#file-autocomplete-widget li:nth-of-type(2) button", stuff + "/dir1")
+        b.wait_in_text(".pf-v6-c-menu li:nth-of-type(1) button", stuff + "/dir")
+        b.wait_in_text(".pf-v6-c-menu li:nth-of-type(2) button", stuff + "/dir1")
 
         # clear the file completion widget
         b.click("#demo-file-ac div:first-of-type div:first-of-type button:nth-of-type(1)")
-        b.wait_not_present("#file-autocomplete-widget li")
         b.focus("#demo-file-ac input[type=text]")
         b.input_text(stuff + "/")
-        b.wait_in_text("#file-autocomplete-widget li:nth-of-type(1) button", stuff + "/")
-        b.wait_in_text("#file-autocomplete-widget li:nth-of-type(4) button", "file1.txt")
-        b.click("#file-autocomplete-widget li:nth-of-type(4) button")
-        b.wait_not_present("#file-autocomplete-widget li")
+        b.wait_in_text(".pf-v6-c-menu li:nth-of-type(1) button", stuff + "/")
+        b.wait_in_text(".pf-v6-c-menu li:nth-of-type(4) button", "file1.txt")
+        b.click(".pf-v6-c-menu li:nth-of-type(4) button")
+        b.wait_not_present(".pf-v6-c-menu")
 
         # now update file1, check robustness with dynamic events
         m.execute(f"touch {stuff}/file1.txt")
         b.focus("#demo-file-ac input[type=text]")
         time.sleep(1)
+        b.key("End")
         b.key("Backspace", 5)
         # input is now $stuff/file
-        b.wait_in_text("#file-autocomplete-widget li:nth-of-type(1) button", "file1.txt")
+        b.wait_in_text(".pf-v6-c-menu li:nth-of-type(1) button", "file1.txt")
         b.key("Backspace", 4)
         # input is now $stuff/, so all listings should be available
-        b.wait_in_text("#file-autocomplete-widget li:nth-of-type(4) button", "file1.txt")
+        b.wait_in_text(".pf-v6-c-menu li:nth-of-type(4) button", "file1.txt")
 
         # add new file
         m.execute(f"touch {stuff}/other")
@@ -638,10 +645,10 @@ OnCalendar=daily
         b.key("Backspace", 6)
         time.sleep(1)
         b.input_text("stuff/")
-        b.wait_in_text("#file-autocomplete-widget li:nth-of-type(5) button", "other")
+        b.wait_in_text(".pf-v6-c-menu li:nth-of-type(5) button", "other")
         # close the selector
         b.click("#demo-file-ac input")
-        b.wait_not_present("#file-autocomplete-widget")
+        b.wait_not_present(".pf-v6-c-menu")
 
         # Create test folder with known files
         m.execute("mkdir /home/admin/newdir")
@@ -653,21 +660,17 @@ OnCalendar=daily
         b.wait_val("#demo-file-ac-preselected input", "/home/admin/newdir/file1")
         # open the selector
         b.click("#demo-file-ac-preselected input")
-        b.wait_visible("#file-autocomplete-widget-preselected")
+        b.wait_visible(".pf-v6-c-menu")
         # close and open again to reload the dir (which just got created)
-        b.click("#demo-file-ac-preselected input")
-        b.wait_not_present("#file-autocomplete-widget-preselected")
+        b.click("#demo-file-ac-preselected .pf-v6-c-menu-toggle__button")
+        b.wait_not_present(".pf-v6-c-menu")
         b.click("#demo-file-ac-preselected input")
         # selection has all the files in the directory
         paths = ["/home/admin/newdir", "/home/admin/newdir/dir1", "/home/admin/newdir/dir2", "/home/admin/newdir/file1", "/home/admin/newdir/file2"]
         for i in range(5):
-            b.wait_in_text(f"#file-autocomplete-widget-preselected li:nth-of-type({i + 1}) button", paths[i])
-        # clicking on input again hides selector dropdown again
-        b.click("#demo-file-ac-preselected input")
-        b.wait_not_present("#file-autocomplete-widget-preselected")
+            b.wait_in_text(f".pf-v6-c-menu li:nth-of-type({i + 1}) button", paths[i])
 
     @testlib.skipOstree("No PCP available")
-    @testlib.skipImage("pcp not currently in testing", "debian-testing")
     def testPlots(self):
         b = self.browser
         m = self.machine
@@ -739,6 +742,12 @@ OnCalendar=daily
         with b.wait_timeout(60):
             b.wait_js_func("ph_plot_data_plateau", "pmcd", mem_avail * 0.85, mem_avail * 1.15, 15, "mem")
 
+        # Internal metrics only has memory used (memory.used) as a metric not available memory.
+        meminfo = read_mem_info(m)
+        mem_avail = meminfo['MemTotal'] - meminfo['MemAvailable']
+        with b.wait_timeout(60):
+            b.wait_js_func("ph_plot_data_plateau", "internal", mem_avail * 0.85, mem_avail * 1.15, 15, "mem")
+
     def testPageStatus(self):
         b = self.browser
 
@@ -751,8 +760,9 @@ OnCalendar=daily
         b.switch_to_top()
         b.wait_visible("#development-info")
         b.mouse("#development-info", "mouseenter")
-        b.wait_in_text(".pf-v5-c-tooltip", "My Little Page Status")
+        b.wait_in_text(".pf-v6-c-tooltip", "My Little Page Status")
         b.mouse("#development-info", "mouseleave")
+        b.wait_not_present(".pf-v6-c-tooltip")
 
         b.go("/playground/notifications-receiver")
         b.enter_page("/playground/notifications-receiver")
@@ -849,8 +859,8 @@ OnCalendar=daily
         b.switch_to_top()
         assert_location("/system")
 
-        # CoreOS does not keep login history
-        if not self.machine.ostree_image:
+        # ws container does not keep login history
+        if not self.machine.ws_container:
 
             b.enter_page("/system")
             b.click("button:contains(View login history)")
@@ -867,10 +877,6 @@ OnCalendar=daily
     def testAllNavEntries(self):
         b = self.browser
         self.login_and_go()
-
-        # https://bugzilla.redhat.com/show_bug.cgi?id=2293652
-        if self.machine.image == "fedora-40":
-            self.allow_browser_errors('Warning: Encountered two children with the same key.*')
 
         # the <a> links should be unique by their href= attributes, so get these
         hrefs = b.eval_js("[...document.querySelectorAll('#nav-system .nav-item a')].map(el => el.getAttribute('href'))")
@@ -903,10 +909,24 @@ OnCalendar=daily
 
         # Various cases of big file upload
         with tempfile.TemporaryDirectory() as tmpdir:
+
+            if b.browser == 'chromium':
+                # Chromium BiDi driver craps out with uploading large files, so throttle network speed there
+                # https://issues.chromium.org/issues/399131925
+                b.cdp_command("Network.emulateNetworkConditions",
+                              offline=False, latency=0, downloadThroughput=-1, uploadThroughput=50000)
+                big_size = "15MB"
+                expected_size = 15 * 1000 * 1000
+            else:
+                # BiDi does not have a network speed API, so we can't throttle on Firefox
+                # but that's happy with large files
+                big_size = "1500MB"
+                expected_size = 1500 * 1000 * 1000
+
             big_file = str(Path(tmpdir) / "bigfile.img")
             # the VM has a total of 1.5G memory, so this would fill it
             # use SI sizes to make sure we test the last incomplete block
-            subprocess.check_call(["truncate", "-s", "1500MB", big_file])
+            subprocess.check_call(["truncate", "-s", big_size, big_file])
 
             # Uploaded to completion.  It's slow, so only do it on default OS.
             # We do this to make sure the file is spooled to disk, not memory.
@@ -915,7 +935,7 @@ OnCalendar=daily
                 b.wait(lambda: b.get_pf_progress_value(".upload-progress-0") >= 2)
                 with b.wait_timeout(120):
                     b.wait_visible("#upload-file-btn:not(:disabled)")
-                self.assertEqual(int(m.execute('stat -c%s /home/admin/bigfile.img')), 1500 * 1000 * 1000)
+                self.assertEqual(int(m.execute('stat -c%s /home/admin/bigfile.img')), expected_size)
                 m.execute('rm /home/admin/bigfile.img')
 
             # Cancelled
@@ -923,7 +943,7 @@ OnCalendar=daily
             b.wait(lambda: b.get_pf_progress_value(".upload-progress-0") >= 2)
             b.click(".cancel-button-0")
             b.wait_visible("#upload-file-btn:not(:disabled)")
-            b.wait_in_text(".pf-v5-c-alert", "Aborted")
+            b.wait_in_text(".pf-v6-c-alert", "Aborted")
             m.execute('! test -f /home/admin/bigfile.img')
 
             # Early ENOSPC error (before we would block on 'ack')
@@ -932,7 +952,7 @@ OnCalendar=daily
             b.set_file_autocomplete_val("#demo-upload", "/mnt/upload/")
             b.upload_files("#demo-upload input[type='file']", [big_file])
             b.wait_visible("#upload-file-btn:not(:disabled)")
-            b.wait_in_text(".pf-v5-c-alert", "No space left on device")
+            b.wait_in_text(".pf-v6-c-alert", "No space left on device")
             self.assertEqual(m.execute('ls -A /mnt/upload'), '')  # nothing left behind
 
             # Later ENOSPC error (after we've blocked)
@@ -940,14 +960,14 @@ OnCalendar=daily
             b.set_file_autocomplete_val("#demo-upload", "/mnt/upload/")
             b.upload_files("#demo-upload input[type='file']", [big_file])
             b.wait_visible("#upload-file-btn:not(:disabled)")
-            b.wait_in_text(".pf-v5-c-alert", "No space left on device")
+            b.wait_in_text(".pf-v6-c-alert", "No space left on device")
             self.assertEqual(m.execute('ls -A /mnt/upload'), '')
 
         # Upload permission error
         b.drop_superuser()
-        b.set_file_autocomplete_val("#demo-upload", "/root/")
+        b.set_file_autocomplete_val("#demo-upload", "/var/")
         b.upload_files("#demo-upload input[type='file']", [test_upload_file])
-        b.wait_in_text(".pf-v5-c-alert", "Not permitted to perform this action")
+        b.wait_in_text(".pf-v6-c-alert", "Not permitted to perform this action")
 
     def testUploadMultiple(self) -> None:
         b = self.browser
@@ -988,6 +1008,127 @@ OnCalendar=daily
         self.assertIn("test", user_info["groups"])
         self.assertEqual(str(user_info["id"]), m.execute("id -u admin").strip())
         self.assertEqual(str(user_info["gid"]), m.execute("id -g admin").strip())
+
+    @testlib.skipImage("No SELinux", "debian-*", "ubuntu-*", "arch")
+    def testFSReplaceSELinuxContext(self) -> None:
+        b = self.browser
+        m = self.machine
+
+        def set_content_and_validate(path, content, custom_context):
+            b.set_input_text("#fsreplace1-filename", path)
+            b.set_input_text("#fsreplace1-content", content)
+            b.set_checked("#fsreplace1-use-tag", val=True)
+            b.click("#fsreplace1-create")
+            b.wait_visible("#fsreplace1-create:not(:disabled)")
+
+            self.assertEqual(m.execute(f"cat {path}"), content)
+            se_context = m.execute(f"stat --format=%C {path}").strip()
+            self.assertEqual(se_context, custom_context)
+
+        path = f"{self.vm_tmpdir}/custom-selinux-context"
+        custom_context = "system_u:object_r:proc_t:s0"
+        m.execute(f"""
+            touch {path}
+            chcon {custom_context} {path}
+        """)
+
+        self.login_and_go("/playground/test")
+        b.wait_visible("#fsreplace1-create")
+        set_content_and_validate(path, "data", custom_context)
+
+        # As normal user
+        b.drop_superuser()
+        self.restore_dir("/home/admin")
+        path = "/home/admin/custom-selinux-context-user"
+        custom_context = "system_u:object_r:proc_t:s0"
+        m.execute("runuser -u admin -- sh -ex", input=f"touch {path}")
+        m.execute(f"chcon {custom_context} {path}")
+
+        b.wait_visible("#fsreplace1-create")
+        set_content_and_validate(path, "user data", custom_context)
+
+    @testlib.skipBeiboot("no local overrides/config in beiboot mode")
+    def testInvalidManifest(self):
+        b = self.browser
+        m = self.machine
+
+        self.login_and_go("/system")
+        b.switch_to_top()
+        self.check_system_menu("Overview", present=True)
+        self.check_system_menu("Networking", present=True)
+
+        # Break the Networking manifest by violating the type of the "order" field.
+        m.write("/etc/cockpit/networkmanager.override.json", '{"menu":{"index":{"order":"not-a-number"}}}')
+
+        b.reload()
+        self.check_system_menu("Overview", present=True)
+        self.check_system_menu("Networking", present=False)
+
+    def testFsreplaceOwnership(self) -> None:
+        b = self.browser
+
+        self.login_and_go("/playground/test")
+
+        def stat(fmt: str, path: str) -> str:
+            return self.machine.execute(['stat', f'--format={fmt}', path]).strip()
+
+        def assert_stat(fmt: str, path: str, expected: str) -> None:
+            self.assertEqual(stat(fmt, path), expected)
+
+        def assert_mode(path: str, mode: str) -> None:
+            assert_stat('%a', path, mode)
+
+        def assert_owner(path: str, owner: str) -> None:
+            assert_stat('%U:%G', path, owner)
+
+        def assert_content(path: str, expected: str) -> None:
+            self.assertEqual(self.machine.execute(f"cat {path}").strip(), expected)
+
+        def set_file_bits(filename: str, content: str,
+                          owner: str = "", group: str = "",
+                          mode: str | None = None) -> None:
+            b.set_input_text("#fsreplace1-filename", filename)
+            b.set_input_text("#fsreplace1-content", content)
+            b.set_input_text("#fsreplace1-user", owner)
+            b.set_input_text("#fsreplace1-group", group)
+            if mode is not None:
+                b.set_input_text("#fsreplace1-mode", mode)
+
+            b.click("#fsreplace1-create")
+            b.wait_visible("#fsreplace1-create:not(:disabled)")
+
+        # Set file permissions on new files
+        filename = "/home/admin/admin.txt"
+        content = "adminfile"
+        set_file_bits(filename, content, "admin", "root")
+        assert_owner(filename, "admin:root")
+        assert_content(filename, content)
+
+        filename = "/home/admin/root.txt"
+        content = "rootfile"
+        set_file_bits(filename, content, "root", "root")
+        assert_owner(filename, "root:root")
+        assert_content(filename, content)
+
+        filename = "/home/admin/root.txt"
+        content = "rootfile"
+        set_file_bits(filename, content, "root", "root")
+        assert_owner(filename, "root:root")
+        assert_content(filename, content)
+
+        filename = f"{self.vm_tmpdir}/root-mode.txt"
+        set_file_bits(filename, content, "root", "root", str(0o600))
+        assert_owner(filename, "root:root")
+        assert_mode(filename, "600")
+        assert_content(filename, content)
+
+        # Mode on existing files
+        filename = f"{self.vm_tmpdir}/existing.txt"
+        self.machine.execute(f"install -m 644 -g admin -o admin /dev/null {filename}")
+        set_file_bits(filename, content, "root", "root", str(0o600))
+        assert_owner(filename, "root:root")
+        assert_mode(filename, "600")
+        assert_content(filename, content)
 
 
 if __name__ == '__main__':

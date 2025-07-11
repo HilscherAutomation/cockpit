@@ -91,13 +91,17 @@ if [ "$PLAN" = "main" ]; then
               TestLogin.testFailingWebsocketSafari
               TestLogin.testFailingWebsocketSafariNoCA
               TestLogin.testLogging
-              TestLogin.testLoginSshBeiboot
+              TestLogin.testNFSHomeDir
+              TestLogin.testSSH
               TestLogin.testRaw
               TestLogin.testServer
+              TestLogin.testSELinuxRestrictedUser
               TestLogin.testUnsupportedBrowser
 
               TestNetworkingBasic.testIpHelper
               TestNetworkingBasic.testNoService
+              TestNetworkingCheckpoints.testCheckpoint
+              TestNetworkingCheckpoints.testCheckpointSlowRollback
               TestNetworkingUnmanaged.testUnmanaged
 
               TestSOS.testWithUrlRoot
@@ -106,6 +110,7 @@ if [ "$PLAN" = "main" ]; then
 
               TestSystemInfo.testInsightsStatus
               TestSystemInfo.testMotd
+              TestSystemInfo.testOverview
               TestSystemInfo.testShutdownStatus
 
               TestJournal.testAbrtDelete
@@ -126,6 +131,7 @@ if [ "$PLAN" = "main" ]; then
               TestServices.testResetFailed
               TestServices.testTransientUnits
               TestServices.testUnprivileged
+              TestServices.testQuadlets
 
               TestUpdates.testUnprivileged
               TestUpdates.testPackageKitCrash
@@ -134,12 +140,18 @@ if [ "$PLAN" = "main" ]; then
               "
 
     # Testing Farm machines often have pending restarts/reboot
-    EXCLUDES="$EXCLUDES TestUpdates.testBasic TestUpdates.testFailServiceRestart TestUpdates.testKpatch"
+    EXCLUDES="$EXCLUDES
+              TestUpdates.testBasic
+              TestUpdates.testDnfRestart
+              TestUpdates.testFailServiceRestart
+              TestUpdates.testKpatch
+              "
 fi
 
 if [ "$PLAN" = "storage-basic" ]; then
     TESTS="TestStorageBasic
            TestStorageBtrfs
+           TestStorageMdRaid
            TestStorageMounting
            TestStorageMountingLUKS
            TestStorageMsDOS

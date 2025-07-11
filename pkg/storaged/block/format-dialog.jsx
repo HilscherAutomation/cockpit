@@ -368,7 +368,7 @@ function format_dialog_internal(client, path, start, size, enable_dos_extended, 
                                                     return _("Passphrase cannot be empty");
                                             },
                                             visible: vals => vals.crypto == " keep" && vals.needs_explicit_passphrase,
-                                            explanation: _("The disk needs to be unlocked before formatting.  Please provide a existing passphrase.")
+                                            explanation: _("The disk needs to be unlocked before formatting. Please provide an existing passphrase.")
                                         }),
                               TextInput("crypto_options", _("Encryption options"),
                                         {
@@ -596,7 +596,7 @@ function format_dialog_internal(client, path, start, size, enable_dos_extended, 
                     const path = new_path || block.path;
                     const new_block = await client.wait_for(() => client.blocks[path]);
 
-                    if (is_encrypted(vals))
+                    if (is_encrypted(vals) && vals.passphrase)
                         remember_passphrase(new_block, vals.passphrase);
 
                     if (is_encrypted(vals) && is_filesystem(vals) && vals.mount_options?.ro) {

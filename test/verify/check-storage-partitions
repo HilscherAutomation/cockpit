@@ -73,7 +73,7 @@ class TestStoragePartitions(storagelib.StorageCase):
         self.dialog_wait_open()
         self.dialog_set_val("type", "empty")
 
-        slider = self.dialog_field("size") + " .pf-v5-c-slider .pf-v5-c-slider__rail"
+        slider = self.dialog_field("size") + " .pf-v6-c-slider .pf-v6-c-slider__rail"
 
         # Move the slider one pixel past the middle, this should give a fractional size.
         # See https://github.com/cockpit-project/cockpit/pull/10968 for more about this.
@@ -82,7 +82,7 @@ class TestStoragePartitions(storagelib.StorageCase):
 
         b.mouse(slider, "click", about_half_way, 0)
         self.dialog_wait_val("size", 27.3)
-        b.focus(slider + " + .pf-v5-c-slider__thumb")
+        b.focus(slider + " + .pf-v6-c-slider__thumb")
         b.key("ArrowLeft", 5)
         self.dialog_wait_val("size", 26.2)
 
@@ -91,9 +91,23 @@ class TestStoragePartitions(storagelib.StorageCase):
         b.select_from_dropdown(".size-unit > select", unit)
         self.dialog_wait_val("size", 26.2, unit)
 
-        # Change unit back to MB
-        unit = "1000000"
-        b.select_from_dropdown(".size-unit > select", unit)
+        # Switch the dialog into the mode where it stores separate text and unit
+        # instead of a numeric value.
+        b.set_input_text(".size-text > input", "26.200001")
+        b.select_from_dropdown(".size-unit > select", "1000000000")  # GB
+
+        # Apply the dialog. This will convert from text+unit back to a
+        # correctly rounded numeric value (which is too large).
+
+        self.dialog_apply()
+        self.dialog_wait_error("size", "Size is too large")
+
+        # The text in the input field must not have changed
+        b.wait_val(".size-text > input", "26.200001")
+
+        # Change unit back to MB.  (This must round again, which it
+        # didn't always do.)
+        b.select_from_dropdown(".size-unit > select", "1000000")  # MB
 
         self.dialog_apply()
         self.dialog_wait_close()

@@ -114,7 +114,7 @@ mock_echo_SOURCES = src/ws/mock-echo.c
 check_PROGRAMS += mock-auth-command
 mock_auth_command_CPPFLAGS = $(libcockpit_common_a_CPPFLAGS) $(TEST_CPP)
 mock_auth_command_LDADD = $(libcockpit_common_a_LIBS) $(TEST_LIBS)
-mock_auth_command_SOURCES = src/ws/mock-auth-command.c
+mock_auth_command_SOURCES = src/ws/mock-auth-command.c src/session/session-utils.c
 
 TEST_PROGRAM += test-auth
 test_auth_CPPFLAGS = $(libcockpit_ws_a_CPPFLAGS) $(TEST_CPP)
@@ -143,7 +143,7 @@ mock_pam_conv_mod_so_LDFLAGS = -shared
 mock_pam_conv_mod_so_LDADD = $(PAM_LIBS)
 
 install-tests::
-	mkdir -p $(DESTDIR)$(pamdir) $(DESTDIR)/etc/cockpit
+	mkdir -p $(DESTDIR)$(pamdir)
 	$(INSTALL_PROGRAM) mock-pam-conv-mod.so $(DESTDIR)$(pamdir)/
 
 install-exec-hook::
@@ -166,14 +166,14 @@ dist_check_DATA += \
 	$(NULL)
 
 appdatadir = $(datadir)/metainfo
-nodist_appdata_DATA = src/ws/cockpit.appdata.xml
-appdata_in = src/ws/cockpit.appdata.xml.in
+nodist_appdata_DATA = src/ws/org.cockpit_project.cockpit.appdata.xml
+appdata_in = src/ws/org.cockpit_project.cockpit.appdata.xml.in
 $(nodist_appdata_DATA): $(appdata_in) $(PO_FILES)
 	$(AM_V_GEN) msgfmt --xml -d $(top_srcdir)/po --template $< --output $@
 CLEANFILES += $(nodist_appdata_DATA)
 EXTRA_DIST += $(appdata_in)
 
-pixmapdir = $(datadir)/pixmaps
-dist_pixmap_DATA = src/ws/cockpit.png
+icons128dir = ${datarootdir}/icons/hicolor/128x128/apps
+dist_icons128_DATA = src/ws/cockpit.png
 
 libexec_SCRIPTS += src/ws/cockpit-desktop

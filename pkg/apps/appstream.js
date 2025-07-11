@@ -20,6 +20,8 @@
 import cockpit from "cockpit";
 import * as python from "python.js";
 import inotify_py from "inotify.py";
+
+import { debug } from "./utils";
 import watch_appstream_py from "./watch-appstream.py";
 
 let metainfo_db = null;
@@ -45,13 +47,10 @@ export function get_metainfo_db() {
                         metainfo_db.origin_files = metadata.origin_files;
                         metainfo_db.ready = true;
                         metainfo_db.dispatchEvent("changed");
+                        debug("read metainfo_db:", metainfo_db);
                     }
                 })
-                .fail(function (error) {
-                    if (error != "closed") {
-                        console.warn(error);
-                    }
-                });
+                .catch(error => console.warn("watch-appstream.py failed:", error));
     }
 
     return metainfo_db;

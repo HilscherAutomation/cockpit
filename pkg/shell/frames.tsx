@@ -1,0 +1,155 @@
+/*
+ * This file is part of Cockpit.
+ *
+ * Copyright (C) 2024 Red Hat, Inc.
+ *
+ * Cockpit is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License as published by
+ * the Free Software Foundation; either version 2.1 of the License, or
+ * (at your option) any later version.
+ *
+ * Cockpit is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with Cockpit; If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/* This is the React component that renders all the iframes for the
+   pages.
+
+   We can't let React itself manipulate the iframe DOM elements,
+   unfortunately, for these reasons:
+
+   - We need to be super careful when setting the "src" attribute of
+     an iframe element. Otherwise we get spurious browsing history
+     entries that cause the Back button of browsers to behave
+     erratically.
+
+   - We need to adjust the window and document inside the iframe a bit.
+
+   Thus, we use a giant useEffect hook to reimplement the incremental
+   DOM updates that React would do for us.
+*/
+
+import React, { useRef, useEffect } from 'react';
+
+import { ShellState, ShellFrame } from "./state";
+import { IdleTimeoutState } from "./idle";
+
+export const Frames = ({ state, idle_state, hidden }: { state: ShellState, idle_state: IdleTimeoutState, hidden: boolean }) => {
+    const content_ref = useRef<HTMLDivElement | null>(null);
+    const { frames, current_frame } = state;
+
+    useEffect(() => {
+        if (!content_ref.current)
+            return;
+
+        const content = content_ref.current;
+
+        function iframe_remove(elt: HTMLIFrameElement) {
+            elt.remove();
+        }
+
+        function iframe_new(name: string) {
+            const elt = document.createElement("iframe");
+            elt.setAttribute("name", name);
+            elt.style.display = "none";
+            content.appendChild(elt);
+            return elt;
+        }
+
+        function setup_iframe(frame: ShellFrame, iframe: HTMLIFrameElement) {
+            if (!iframe.contentWindow)
+                return;
+
+            idle_state.setupIdleResetEventListeners(iframe.contentWindow);
+            iframe.contentWindow.addEventListener("unload", () => teardown_iframe(frame), { once: true });
+
+            if (iframe.contentDocument && iframe.contentDocument.documentElement) {
+                iframe.contentDocument.documentElement.lang = state.config.language;
+                if (state.config.language_direction)
+                    iframe.contentDocument.documentElement.dir = state.config.language_direction;
+            }
+
+            if (!frame.ready) {
+                frame.ready = true;
+                state.update();
+            }
+        }
+
+        function teardown_iframe(frame: ShellFrame) {
+            if (frame.ready) {
+                frame.ready = false;
+                state.update();
+            }
+        }
+
+        const iframes_by_name: Record<string, HTMLIFrameElement> = {};
+
+        for (let i = 0; i < content.children.length; i++) {
+            const c = content.children[i];
+            const name = c.getAttribute('name');
+            if (c.nodeName == "IFRAME" && name) {
+                iframes_by_name[name] = c as HTMLIFrameElement;
+            }
+        }
+
+        // Remove obsolete iframes
+        for (const name in iframes_by_name) {
+            if (!frames[name] || frames[name].url == null)
+                iframe_remove(iframes_by_name[name]);
+        }
+
+        // Add new and update existing iframes
+        for (const name in frames) {
+            const frame = frames[name];
+            if (!frame.url)
+                continue;
+
+            let iframe = iframes_by_name[name];
+
+            if (!iframe) {
+                iframe = iframe_new(name);
+                iframe.setAttribute("class", "container-frame");
+                iframe.setAttribute("data-host", frame.host);
+                iframe.addEventListener("load", () => setup_iframe(frame, iframe));
+            }
+
+            if (iframe.getAttribute("title") != frame.title)
+                iframe.setAttribute("title", frame.title);
+
+            if (frame.loaded && iframe.getAttribute("data-loaded") == null)
+                iframe.setAttribute("data-loaded", "1");
+            else if (!frame.loaded && iframe.getAttribute("data-loaded"))
+                iframe.removeAttribute("data-loaded");
+
+            const src = frame.url + "#" + frame.hash;
+
+            if (iframe.getAttribute('src') != src) {
+                if (iframe.contentWindow) {
+                    // This prevents the browser from creating a new
+                    // history entry.  It would do that whenever the "src"
+                    // of a frame is changed and the window location is
+                    // not consistent with the new "src" value.
+                    //
+                    // This matters when a "jump" command changes both
+                    // the current frame and the hash of the newly
+                    // current frame.
+                    iframe.contentWindow.location.replace(src);
+                }
+                iframe.setAttribute('src', src);
+            }
+
+            iframe.style.display = (!hidden && frame == current_frame && frame.ready) ? "block" : "none";
+        }
+    });
+
+    return <div ref={content_ref}
+                id="content"
+                className="area-ct-content"
+                role="main"
+                tabIndex={-1} />;
+};

@@ -25,7 +25,7 @@ from lib.constants import TEST_OS_DEFAULT
 class TestNetworkingSettings(netlib.NetworkCase):
     provision = {
         "machine1": {"memory_mb": 512},
-        "machine2": {"image": TEST_OS_DEFAULT, "address": "10.111.113.2/20", "dhcp": True, "memory_mb": 256}
+        "machine2": {"image": TEST_OS_DEFAULT, "address": "10.111.113.2/20", "dhcp": True, "memory_mb": 512}
     }
 
     def testNoConnectionSettings(self):
@@ -67,7 +67,7 @@ class TestNetworkingSettings(netlib.NetworkCase):
 
         # The interface will be activated. Deactivate it.
         self.wait_for_iface_setting('Status', '1.2.3.4/24')
-        self.toggle_onoff(f".pf-v5-c-card__header:contains('{iface}')")
+        self.toggle_onoff(f".pf-v6-c-card__header:contains('{iface}')")
         self.wait_for_iface_setting('Status', 'Inactive')
 
         # Delete the connection settings again and wait for the ghost
@@ -76,14 +76,14 @@ class TestNetworkingSettings(netlib.NetworkCase):
         self.wait_for_iface_setting('IPv4', 'Automatic')
 
         # Activate with ghost settings
-        self.toggle_onoff(f".pf-v5-c-card__header:contains('{iface}')")
+        self.toggle_onoff(f".pf-v6-c-card__header:contains('{iface}')")
         self.wait_for_iface_setting('Status', '10.111.')
 
         # Check again that we now have connection settings
         con_id = testlib.wait(lambda: self.iface_con_id(iface))
         assert_connection_setting(con_id, "ipv4.method", "auto")
 
-        # Change some more settins and check that the actual config
+        # Change some more settings and check that the actual config
         # and dialog reflects the change
 
         self.configure_iface_setting('IPv4')

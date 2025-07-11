@@ -10,8 +10,7 @@ jobs:
       contents: read
       pull-requests: write
     timeout-minutes: 5
-    # 22.04's podman has issues with piping and causes tar errors
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     if: ${{ contains(github.event.pull_request.labels.*.name, 'node_modules') }}
 
     steps:
@@ -40,6 +39,18 @@ jobs:
                 throw e;
               }
             }
+
+      - name: Rebase pull request and drop node_modules changes
+        run: |
+          set -x
+          git config --global user.name "GitHub Workflow"
+          git config --global user.email "cockpituous@cockpit-project.org"
+          git fetch origin main:main
+          if ! git rebase main; then
+            git reset node_modules
+            GIT_EDITOR=true git rebase --continue
+            git show --stat
+          fi
 
       - name: Update node_modules for package.json changes
         run: |

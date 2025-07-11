@@ -31,7 +31,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef HAVE_PIDFD_GETPID
+#include <sys/pidfd.h>
+#endif
+
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <syslog.h>
 #include <unistd.h>
 
@@ -41,65 +48,181 @@
 
 #define CLIENT_CERTIFICATE_DIRECTORY   "/run/cockpit/tls/clients"
 
+static int
+open_proc_pid (pid_t pid)
+{
+    char path[100];
+    int r = snprintf (path, sizeof path, "/proc/%lu", (unsigned long) pid);
+    if (r < 0 || r >= sizeof path)
+        errx (EX, "memory error");
+    int fd = open (path, O_DIRECTORY | O_NOFOLLOW | O_PATH | O_CLOEXEC);
+    if (fd < 0)
+      err (EX, "failed to open %s", path);
+    return fd;
+}
+
+static size_t
+read_proc_file (int dirfd, const char *name, char *buffer, size_t bufsize)
+{
+  int fd = openat (dirfd, name, O_RDONLY | O_CLOEXEC);
+  if (fd < 0)
+    err (EX, "Failed to open %s proc file", name);
+
+  /* we don't accept/expect EINTR or short reads here: this is /proc, and we don't have
+   * signal handlers which survive the login */
+  ssize_t len = read (fd, buffer, bufsize);
+  if (len < 0)
+    err (EX, "Failed to read /proc file %s", name);
+
+  close (fd);
+  if (len >= bufsize)
+    errx (EX, "proc file %s exceeds buffer size %zu", name, bufsize);
+  buffer[len] = '\0';
+  return len;
+}
+
 /* This is a bit lame, but having a hard limit on peer certificates is
  * desirable: Let's not get DoSed by huge certs */
 #define MAX_PEER_CERT_SIZE 100000
 
 /* Reads the cgroupsv2-style /proc/[pid]/cgroup file of the process,
  * including "0::" prefix and newline.
- *
- * In case of cgroupsv1, look for the name=systemd controller, and fake
- * it.
- */
+ * NB: the kernel doesn't allow newlines in cgroup names. */
 static char *
-read_proc_self_cgroup (size_t *out_length)
+read_proc_pid_cgroup (int dirfd, size_t *out_length)
 {
-  FILE *fp = fopen ("/proc/self/cgroup", "r");
-
-  if (fp == NULL)
-    {
-      warn ("Failed to open /proc/self/cgroup");
-      return NULL;
-    }
-
-  /* Support cgroups v1 by looping.
-   * Once we no longer need this support, we can drop the loop, switch
-   * to fread(), and just return the entire content of the file.
-   *
-   * NB: the kernel doesn't allow newlines in cgroup names.
-   */
   char buffer[1024];
-  char *result = NULL;
-  while (fgets (buffer, sizeof buffer, fp))
+  size_t len = read_proc_file (dirfd, "cgroup", buffer, sizeof buffer);
+
+  if (strncmp (buffer, "0::/", 4) == 0 && /* must be a cgroupsv2 */
+      buffer[len - 1] == '\n') /* must end with a newline */
     {
-      if (strncmp (buffer, "0::", 3) == 0)
-        {
-          /* cgroupsv2 (or hybrid) case.  Return the entire line. */
-          result = strdupx (buffer);
-          break;
-        }
-      else if (strncmp (buffer, "1:name=systemd:", 15) == 0)
-        {
-          /* cgroupsv1.  Rewrite to what we'd expect from cgroupsv2. */
-          asprintfx (&result, "0::%s", buffer + 15);
-          break;
-        }
+      *out_length = len;
+      return strdupx (buffer);
     }
 
-  fclose (fp);
+  warnx ("unexpected cgroups content, certificate matching only supports cgroup v2: '%s'", buffer);
+  exit_init_problem ("authentication-unavailable", "certificate matching only supports cgroup v2");
+}
 
-  assert (result != NULL);
+static
+unsigned long long get_proc_pid_start_time (int dirfd)
+{
+  char buffer[4096];
+  read_proc_file (dirfd, "stat", buffer, sizeof buffer);
 
-  *out_length = strlen (result);
+  /* start time is the token at index 19 after the '(process name)' entry - since only this
+  * field can contain the ')' character, search backwards for this to avoid malicious
+  * processes trying to fool us; See proc_pid_stat(5) */
+  const char *p = strrchr (buffer, ')');
+  if (p == NULL)
+    errx (EX, "Failed to find process name in /proc/pid/stat: %s", buffer);
+  for (int i = 0; i <= 19; i++) /* NB: ')' is the first token */
+    {
+      p = strchr (p, ' ');
+      if (p == NULL)
+        errx (EX, "Failed to find start time in /proc/pid/stat");
+      ++p; /* skip over the space */
+    }
 
-  /* Make sure we have a non-empty result, and that it ends with a
-   * newline: this could only fail if the kernel returned something
-   * unexpected.
-   */
-  assert (*out_length >= 5); /* "0::/\n" */
-  assert (result[*out_length - 1] == '\n');
+  char *endptr;
+  unsigned long long start_time = strtoull (p, &endptr, 10);
+  if (*endptr != ' ')
+    errx (EX, "Failed to parse start time in /proc/pid/stat from %s", p);
+  return start_time;
+}
 
-  return result;
+/* Fallback for get_ws_proc_fd() on older kernels which don't support enough pidfd API */
+static int
+get_ws_proc_fd_pid_time (int unix_fd)
+{
+  struct ucred ucred;
+  socklen_t ucred_len = sizeof ucred;
+  if (getsockopt (unix_fd, SOL_SOCKET, SO_PEERCRED, &ucred, &ucred_len) != 0 ||
+      /* this is an inout parameter, be extra suspicious */
+      ucred_len != sizeof ucred)
+    {
+      debug ("failed to read stdin peer credentials: %m; not in socket mode?");
+      warnx ("Certificate authentication only supported with cockpit-session.socket");
+      exit_init_problem ("authentication-unavailable", "Certificate authentication only supported with cockpit-session.socket");
+    }
+
+  debug ("unix socket mode, ws peer pid %d", ucred.pid);
+  int ws_proc_dirfd = open_proc_pid (ucred.pid);
+  unsigned long long ws_start_time = get_proc_pid_start_time (ws_proc_dirfd);
+
+  int my_pid_dirfd = open_proc_pid (getpid ());
+  unsigned long long my_start_time = get_proc_pid_start_time (my_pid_dirfd);
+  close (my_pid_dirfd);
+
+  debug ("peer start time: %llu, my start time: %llu", ws_start_time, my_start_time);
+
+  /* Guard against pid recycling: If a malicious user captures ws, keeps the socket in a forked child and exits
+    * the original pid, they can trick a different user to login, get the old pid (pointing to their cgroup), and
+    * capture their session. To prevent that, require that ws must have started earlier than ourselves. */
+  if (my_start_time < ws_start_time)
+    {
+      warnx ("start time of this process (%llu) is older than cockpit-ws (%llu), pid recycling attack?",
+              my_start_time, ws_start_time);
+      close (ws_proc_dirfd);
+      exit_init_problem ("access-denied", "implausible cockpit-ws start time");
+    }
+
+  return ws_proc_dirfd;
+}
+
+/* Get a /proc/[pid] dirfd for our Unix socket peer (i.e. cockpit-ws).
+ * We only support being called via cockpit-session.socket (i.e. Unix socket).
+ */
+static int
+get_ws_proc_fd (int unix_fd)
+{
+#if defined(SO_PEERPIDFD) && defined(HAVE_PIDFD_GETPID)
+  int pidfd = -1;
+  socklen_t socklen = sizeof pidfd;
+  /* this is always the pidfd for the process that started the communication, it cannot be recycled */
+  if (getsockopt (unix_fd, SOL_SOCKET, SO_PEERPIDFD, &pidfd, &socklen) < 0)
+    {
+      if (errno == ENOPROTOOPT)
+        {
+          debug ("SO_PEERPIDFD not supported: %m, falling back to pid/time check");
+          return get_ws_proc_fd_pid_time (unix_fd);
+        }
+
+      warn ("Failed to get peer pidfd");
+      exit_init_problem ("access-denied", "Failed to get peer pidfd");
+    }
+  /* this is an inout parameter, be extra suspicious; this really Should Not Happen™, so bomb out */
+  if (socklen != sizeof pidfd)
+    errx (EX, "SO_PEERPIDFD returned too small result");
+
+  /* get pid for pidfd; from here on this is racy and could suffer from PID recycling */
+  pid_t pid = pidfd_getpid (pidfd);
+  if (pid < 0)
+    {
+      /* be *very* strict here. This could theoretically ENOSYS if glibc has pidfd_getpid() but the kernel doesn't
+       * support it; but err on the side of denying access rather than falling back */
+      warn ("Failed to get pid from pidfd");
+      exit_init_problem ("access-denied", "Failed to get pid from pidfd");
+    }
+
+  debug ("pid from ws peer pidfd: %i", (int) pid);
+  int ws_proc_dirfd = open_proc_pid (pid);
+
+  /* check that the pid is still valid to guard against recycling */
+  if (pidfd_getpid (pidfd) != pid)
+    {
+      warn ("original pid %i is not valid any more", (int) pid);
+      exit_init_problem ("access-denied", "Failed to get cockpit-ws pid");
+    }
+
+  close (pidfd);
+  return ws_proc_dirfd;
+
+#else
+  debug ("not built with pidfd support, falling back to pid/time check");
+  return get_ws_proc_fd_pid_time (unix_fd);
+#endif
 }
 
 /* valid_256_bit_hex_string:
@@ -313,7 +436,8 @@ out:
  *
  * Read the given certificate file, ensure that it belongs to our own cgroup, and ask
  * sssd to map it to a user. If everything matches as expected, return the user name.
- * Otherwise return %NULL, a warning message will already have been logged.
+ * Otherwise exit the process with sending an appropriate error to stdout using the
+ * Cockpit protocol.
  */
 char *
 cockpit_session_client_certificate_map_user (const char *client_certificate_filename)
@@ -325,31 +449,36 @@ cockpit_session_client_certificate_map_user (const char *client_certificate_file
   if (read_cert_file (client_certificate_filename, cert_pem, sizeof cert_pem) < 0)
     {
       warnx ("No https instance certificate present");
-      return NULL;
+      exit_init_problem ("authentication-unavailable", "No https instance certificate present");
     }
 
-  size_t my_cgroup_length;
-  char *my_cgroup = read_proc_self_cgroup (&my_cgroup_length);
-  if (my_cgroup == NULL)
-    {
-      warnx ("Could not determine cgroup of this process");
-      return NULL;
-    }
-  /* A simple prefix comparison is appropriate here because my_cgroup
-   * will contain exactly one newline (at the end), and the expected
-   * value of my_cgroup is on the first line in cert_pem.
+  /* We need to check the cgroup of cockpit-ws (our peer); we are systemd socket activated, so stdin is a socket */
+  int ws_proc_dirfd = get_ws_proc_fd (STDIN_FILENO);
+  size_t ws_cgroup_length;
+  char *ws_cgroup = read_proc_pid_cgroup (ws_proc_dirfd, &ws_cgroup_length);
+  assert (ws_cgroup);
+  close (ws_proc_dirfd);
+
+  /* read_proc_pid_cgroup() already ensures that, but just in case we refactor this: this is *essential* for the
+   * subsequent comparison */
+  if (ws_cgroup[ws_cgroup_length - 1] != '\n')
+    errx (EX, "cgroup does not end in newline");
+
+  /* A simple prefix comparison is appropriate here because ws_cgroup
+   * contains exactly one newline (at the end), and the expected
+   * value of ws_cgroup is on the first line in cert_pem.
    */
-  if (strncmp (cert_pem, my_cgroup, my_cgroup_length) != 0)
+  if (strncmp (cert_pem, ws_cgroup, ws_cgroup_length) != 0)
     {
       warnx ("This client certificate is only meant to be used from another cgroup");
-      free (my_cgroup);
-      return NULL;
+      free (ws_cgroup);
+      exit_init_problem ("access-denied", "mismatching client certificate");
     }
-  free (my_cgroup);
+  free (ws_cgroup);
 
   /* ask sssd to map cert to a user */
-  if (!sssd_map_certificate (cert_pem + my_cgroup_length, &sssd_user))
-    return NULL;
+  if (!sssd_map_certificate (cert_pem + ws_cgroup_length, &sssd_user))
+    exit_init_problem ("authentication-failed", "sssd does not know this certificate");
 
   return sssd_user;
 }

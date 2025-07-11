@@ -22,42 +22,43 @@ import time
 import testlib
 
 
+@testlib.skipBeiboot("no local overrides/config in beiboot mode")
 @testlib.nondestructive
 class TestMenu(testlib.MachineCase):
 
     def testDarkThemeSwitcher(self):
         b = self.browser
 
-        def switch_style(style_class, prevPage="system", pixel_test=False):
+        def switch_style(style_sel, prevPage="system", pixel_test=False):
             b.switch_to_top()
             b.click("#toggle-menu")
             if pixel_test:
                 b.wait_visible("#toggle-menu-menu")
                 b.assert_pixels_in_current_layout("#toggle-menu-menu", "shell-toggle-menu")
-            b.click(f"#topnav {style_class}")
+            b.click(style_sel)
             b.enter_page(f"/{prevPage}")
 
         self.login_and_go("/system")
         switch_style("#dark", pixel_test=True)
-        b._wait_present("html.pf-v5-theme-dark")
+        b._wait_present("html.pf-v6-theme-dark")
 
         switch_style("#light")
-        b.wait_not_present("html.pf-v5-theme-dark")
+        b.wait_not_present("html.pf-v6-theme-dark")
 
         # Test overriding, switching only works on Chromium
         if b.browser == "chromium":
             # Light theme overrides browser defaults
             b._set_emulated_media_theme("dark")
-            b.wait_not_present("html.pf-v5-theme-dark")
+            b.wait_not_present("html.pf-v6-theme-dark")
 
             switch_style("#auto")
-            b._wait_present("html.pf-v5-theme-dark")
+            b._wait_present("html.pf-v6-theme-dark")
 
             b._set_emulated_media_theme("light")
-            b.wait_not_present("html.pf-v5-theme-dark")
+            b.wait_not_present("html.pf-v6-theme-dark")
 
             switch_style("#dark")
-            b._wait_present("html.pf-v5-theme-dark")
+            b._wait_present("html.pf-v6-theme-dark")
 
     def testBasic(self):
         b = self.browser
@@ -67,7 +68,7 @@ class TestMenu(testlib.MachineCase):
         m.execute("mkdir -p /usr/local/share/cockpit/systemd; cp -rp /usr/share/cockpit/systemd/* /usr/local/share/cockpit/systemd")
         m.execute(
             """sed -i '/"menu"/a "memory": { "label": "Memory", "path": "#/memory" },' /usr/local/share/cockpit/systemd/manifest.json""")
-        self.addCleanup(m.execute, "rm -r /usr/local/share/cockpit")
+        self.addCleanup(m.execute, "rm -r /usr/local/share/cockpit/systemd")
 
         self.login_and_go("/system")
 
@@ -78,7 +79,9 @@ class TestMenu(testlib.MachineCase):
         if not m.ostree_image:
             pkgname = "cockpit" if m.image == "arch" else "cockpit-bridge"
             b.wait_visible(f'#about-cockpit-modal:contains("{pkgname}")')
-        b.click('.pf-v5-c-about-modal-box__close button')
+            b.assert_pixels('.pf-v6-c-modal-box:has(#about-cockpit-modal)', "about-cockpit-modal",
+                            mock={".pf-v6-c-content--dd": "v1234"})
+        b.click('.pf-v6-c-about-modal-box__close button')
         b.wait_not_present('#about-cockpit-modal')
 
         # Clicking inside the iframed pages should close the docs menu
@@ -135,7 +138,7 @@ class TestMenu(testlib.MachineCase):
         time.sleep(35)
         with b.wait_timeout(3):
             b.wait_visible("#session-timeout-modal")
-            self.assertGreater(int(b.text("#session-timeout-modal .pf-v5-c-modal-box__body").split()[-2]), 15)
+            self.assertGreater(int(b.text("#session-timeout-modal .pf-v6-c-modal-box__body").split()[-2]), 15)
         # click on "Continue session"
         b.click("#session-timeout-modal footer button")
         b.wait_not_present("#session-timeout-modal")
@@ -144,7 +147,7 @@ class TestMenu(testlib.MachineCase):
         time.sleep(30)
         with b.wait_timeout(8):
             b.wait_popup("session-timeout-modal")
-            self.assertGreater(int(b.text("#session-timeout-modal .pf-v5-c-modal-box__body").split()[-2]), 20)
+            self.assertGreater(int(b.text("#session-timeout-modal .pf-v6-c-modal-box__body").split()[-2]), 20)
 
         time.sleep(30)
         # that logs you out
@@ -159,12 +162,10 @@ class TestMenu(testlib.MachineCase):
         # initially shows host switcher
         b.wait_visible("#hosts-sel")
         self.assertEqual(b.eval_js("document.activeElement.tagName"), "BODY")
-        # conceptually we want that, but we use CSS hacks (-999 offset and 1x1 size) to hide it
-        # b.wait_not_visible(".skiplink")
 
         # press Tab once → "Skip to content" skiplink
         b.key("Tab")
-        b.wait_js_cond("document.activeElement.classList.contains('skiplink')")
+        b.wait_js_cond("document.activeElement.parentElement.classList.contains('pf-v6-c-skip-to-content')")
         self.assertEqual(b.eval_js("document.activeElement.textContent"), "Skip to content")
         self.assertEqual(b.eval_js("document.activeElement.getAttribute('href')"), "#content")
         b.key("Enter")
@@ -175,6 +176,7 @@ class TestMenu(testlib.MachineCase):
         # reset
         b.reload()
         b.wait_visible("#hosts-sel")
+        b.wait_text("#super-user-indicator", "Administrative access")
 
         # press Tab twice → "Skip main navigation" skiplink
         b.key("Tab")
@@ -186,20 +188,12 @@ class TestMenu(testlib.MachineCase):
         self.assertEqual(b.eval_js("document.activeElement.getAttribute('id')"), "hosts-sel")
 
         # actually skips the page menu and goes on to top nav bar; where exactly depends on whether
-        # the host switcher is enabled, and whether the privilege button is visible (not with ws container)
+        # the host switcher is enabled.
         b.key("Tab")
         if self.multihost_enabled:
             b.wait_js_cond("document.activeElement.getAttribute('id') === 'host-toggle'")
             b.key("Tab")
-            if self.machine.ostree_image:
-                b.wait_js_cond("document.activeElement.textContent === 'Help'")
-            else:
-                b.wait_js_cond("document.activeElement.textContent === 'Administrative access'")
-        else:
-            if self.machine.ostree_image:
-                b.wait_js_cond("document.activeElement.textContent === 'Help'")
-            else:
-                b.wait_js_cond("document.activeElement.textContent === 'Administrative access'")
+        b.wait_js_cond("document.activeElement.textContent === 'Administrative access'")
 
         # reset
         b.reload()
@@ -208,7 +202,17 @@ class TestMenu(testlib.MachineCase):
         # without skip links, tabbing goes through page menu
         b.key("Tab", repeat=5)
         # different browsers behave a bit different here -- Firefox is at "Overview", Chromium at "Logs"
-        b.wait_js_cond("document.activeElement.classList.contains('pf-v5-c-nav__link')")
+        b.wait_js_cond("document.activeElement.classList.contains('pf-v6-c-nav__link')")
+
+    def testCustomLandingPage(self):
+        b = self.browser
+        m = self.machine
+
+        # # Make the logs page the default page
+        m.write("/etc/cockpit/systemd.override.json", '{"menu":{"index":{"order":100},"logs":{"order":1}}}')
+
+        self.login_and_go()
+        b.wait_js_cond('window.location.pathname == "/system/logs"')
 
 
 if __name__ == '__main__':

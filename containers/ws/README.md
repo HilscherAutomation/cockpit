@@ -1,25 +1,37 @@
-# Cockpit on Fedora CoreOS or other container hosts
+# Cockpit webserver container
 
-The standard Fedora and Red Hat Enterprise Linux CoreOS images does not contain
-Cockpit packages.
+[Cockpit](https://cockpit-project.org/) is a web-based graphical interface for Linux servers.
+It is [packaged in most major Linux distributions](https://cockpit-project.org/running.html).
 
-1. Install Cockpit packages as overlay RPMs:
-   ```
-   rpm-ostree install cockpit-system cockpit-ostree cockpit-podman
-   ```
+This container image provides Cockpit's web server and a subset of available pages (like the cockpit-system package)
+for deployment on container hosts such as Fedora CoreOS or Kubernetes, where installing rpms is difficult or impossible.
 
-   Depending on your configuration, you may want to use
-   [other extensions](https://apps.fedoraproject.org/packages/s/cockpit-) as
-   well, such as `cockpit-kdump` or `cockpit-networkmanager`.
+## Usage on container host distributions
 
-   If you have a custom-built OSTree, simply include the same packages in your build.
+The standard Fedora and Red Hat Enterprise Linux CoreOS images do not contain Cockpit packages. The
+`cockpit/ws` container includes a minimal set of builtin Cockpit pages which are being used when connecting to
+such a machine, i.e. a host which doesn't have the `cockpit-bridge` package installed.
 
-2. Reboot
+If these builtin pages are not enough for your use cases, you can install desired Cockpit packages
+as overlay RPMs. For example:
 
-Steps 1 and 2 are enough when the CoreOS machine is only connected to through another host running Cockpit.
+```
+rpm-ostree install cockpit-system cockpit-ostree cockpit-podman
+reboot
+```
 
-If you want to also run a web server to log in directly on the CoreOS host, you
-can use this container in two modes.
+Depending on your configuration, you may want to use
+[other extensions](https://packages.fedoraproject.org/search?query=cockpit-) as
+well, such as `cockpit-podman` or `cockpit-networkmanager`.
+
+If you have a custom-built OSTree, simply include the same packages in your build.
+
+These packages are enough when the CoreOS machine is only connected to through another host running Cockpit.
+
+You also need to run a Cockpit web server somewhere, as the "entry point" for browsers. That can
+then connect to the local host or any remote machine via ssh to get a Cockpit UI for that machine.
+
+This web server can be deployed as container. It has two modes, which are described below.
 
 ## Privileged ws container
 
@@ -88,7 +100,7 @@ this by passing your own configuration as a volume:
 Similarly you can also provide a custom `/etc/os-release` to change the
 branding.
 
-### SSH authentication
+### SSH authentication: Share keys with container
 
 The login page asks the user to confirm unknown SSH host key fingerprints.  You
 can mount your known host keys into the container at
@@ -97,11 +109,29 @@ can mount your known host keys into the container at
 
     -v /path/to/known_hosts:/etc/ssh/ssh_known_hosts:ro,Z
 
-You can also mount an encrypted private key inside the container and set the environment variable `COCKPIT_SSH_KEY_PATH` to point to it:
+You can also mount encrypted private keys inside the container. You can set an environment variable, `COCKPIT_SSH_KEY_PATH_MYHOST`, where `MYHOST` is the uppercased hostname used in the `Connect to` field, and cockpit will use that private key to login for the specified host. Private keys can be set for multiple hosts this way by changing the value of `MYHOST`. You can also set an environment variable, `COCKPIT_SSH_KEY_PATH`, which will be used as a fallback key if no host-specific key is set:
 
-    -e COCKPIT_SSH_KEY_PATH=/id_rsa -v ~/.ssh/id_rsa:/id_rsa:ro,Z
+    -e COCKPIT_SSH_KEY_PATH_MYHOST=/.ssh/myhost_id_rsa \
+    -e COCKPIT_SSH_KEY_PATH_MYSERVER=/.ssh/myserver_id_rsa \
+    -e COCKPIT_SSH_KEY_PATH_192.168.1.1=/.ssh/another_id_rsa \
+    -e COCKPIT_SSH_KEY_PATH=/.ssh/id_rsa \
+    -v ~/.ssh/:/.ssh:ro,Z
 
-Then cockpit will use the provided password to decrypt the key and establish an SSH connection to the given host using that private key.
+Private keys can be encrypted; then cockpit uses the provided password to decrypt the key.
+
+### SSH authentication: Share SSH agent with container
+
+Alternatively, if you use [ssh-agent](https://linux.die.net/man/1/ssh-agent) on
+your host, you can share it with the container and run the container as your
+own user (*not* as system container!). Then logging into remote machines from
+Cockpit's login page re-uses the loaded private keys. For that, bind-mount the
+agent socket in the container and tell it its path. If your host has SELinux
+enabled, you need to disable the isolation for the container, so that it is
+allowed to connect to the agent socket:
+
+    -v $SSH_AUTH_SOCK:/ssh-agent \
+    -e SSH_AUTH_SOCK=/ssh-agent \
+    --security-opt=label=disable
 
 ## More Info
 

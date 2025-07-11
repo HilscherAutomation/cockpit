@@ -17,7 +17,7 @@
  * along with Cockpit; If not, see <https://www.gnu.org/licenses/>.
  */
 
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
 import cockpit from "cockpit";
 
 import React, { useEffect, useState } from "react";
@@ -29,13 +29,15 @@ import { HelperText, HelperTextItem } from "@patternfly/react-core/dist/esm/comp
 import { Flex, FlexItem } from "@patternfly/react-core/dist/esm/layouts/Flex/index.js";
 import { Form, FormGroup, FormSection } from "@patternfly/react-core/dist/esm/components/Form/index.js";
 import { FormSelect, FormSelectOption } from "@patternfly/react-core/dist/esm/components/FormSelect/index.js";
-import { Page, PageSection, PageSectionVariants } from "@patternfly/react-core/dist/esm/components/Page/index.js";
+import { Page, PageSection } from "@patternfly/react-core/dist/esm/components/Page/index.js";
 import { CodeBlockCode } from "@patternfly/react-core/dist/esm/components/CodeBlock/index.js";
 import { DescriptionList, DescriptionListDescription, DescriptionListGroup, DescriptionListTerm } from "@patternfly/react-core/dist/esm/components/DescriptionList/index.js";
-import { Modal } from "@patternfly/react-core/dist/esm/components/Modal/index.js";
+import {
+    Modal, ModalBody, ModalFooter, ModalHeader
+} from '@patternfly/react-core/dist/esm/components/Modal/index.js';
 import { Spinner } from "@patternfly/react-core/dist/esm/components/Spinner/index.js";
 import { Switch } from "@patternfly/react-core/dist/esm/components/Switch/index.js";
-import { Text, TextContent, TextVariants } from "@patternfly/react-core/dist/esm/components/Text/index.js";
+import { Content, ContentVariants } from "@patternfly/react-core/dist/esm/components/Content/index.js";
 import { TextInput } from "@patternfly/react-core/dist/esm/components/TextInput/index.js";
 import { Title } from "@patternfly/react-core/dist/esm/components/Title/index.js";
 import { Tooltip } from "@patternfly/react-core/dist/esm/components/Tooltip/index.js";
@@ -58,7 +60,7 @@ const exportAnsibleTask = (settings, os_release) => {
     const kdump_core_collector = settings.core_collector;
 
     let role_name = "linux-system-roles";
-    if (os_release.NAME === "RHEL" || os_release.ID_LIKE?.includes('rhel')) {
+    if (os_release?.PLATFORM_ID?.startsWith('platform:el') || os_release.ID_LIKE?.includes('rhel')) {
         role_name = "rhel-system-roles";
     }
 
@@ -113,12 +115,15 @@ const exportAnsibleTask = (settings, os_release) => {
     return ansible;
 };
 
-function getLocation(target) {
+function getLocation(target, config) {
     let path = target.path || DEFAULT_KDUMP_PATH;
 
     if (target.type === "ssh") {
         path = `${target.server}:${path}`;
     } else if (target.type == "nfs") {
+        if (!config.nfs_supports_directory) {
+            path = '';
+        }
         path = path[0] !== '/' ? '/' + path : path;
         path = `${target.server}:${target.export + path}`;
     }
@@ -218,108 +223,110 @@ const KdumpSettingsModal = ({ settings, initialTarget, handleSave }) => {
 
     return (
         <Modal position="top" variant="small" id="kdump-settings-dialog" isOpen
-               title={_("Crash dump location")}
-               onClose={Dialogs.close}
-               footer={
-                   <>
-                       <Button variant="primary"
-                               isLoading={isSaving}
-                               isDisabled={isSaving || !isFormValid || Object.keys(validationErrors).length !== 0}
-                               onClick={saveSettings}>
-                           {_("Save changes")}
-                       </Button>
-                       <Button variant="link"
-                               isDisabled={isSaving}
-                               className="cancel"
-                               onClick={Dialogs.close}>
-                           {_("Cancel")}
-                       </Button>
-                   </>
-               }>
-            {error && <ModalError isExpandable
-                                  dialogError={error.message || error}
-                                  dialogErrorDetail={error.details} />}
-            <Form id="kdump-settings-form" isHorizontal>
-                <FormGroup fieldId="kdump-settings-location" label={_("Location")}>
-                    <FormSelect key="location" onChange={(_, val) => changeStorageLocation(val)}
-                                id="kdump-settings-location" value={storageLocation}>
-                        <FormSelectOption value='local'
-                                          label={_("Local filesystem")} />
-                        <FormSelectOption value='ssh'
-                                          label={_("Remote over SSH")} />
-                        <FormSelectOption value='nfs'
-                                          label={_("Remote over NFS")} />
-                    </FormSelect>
-                </FormGroup>
-
-                {storageLocation === "local" &&
-                    <FormGroup fieldId="kdump-settings-local-directory" label={_("Directory")} isRequired>
-                        <TextInput id="kdump-settings-local-directory" key="directory"
-                                   placeholder={DEFAULT_KDUMP_PATH} value={directory}
-                                   data-stored={directory}
-                                   onChange={(_event, value) => setDirectory(value)}
-                                   isRequired />
+               onClose={Dialogs.close}>
+            <ModalHeader title={_("Crash dump location")} />
+            <ModalBody>
+                {error && <ModalError isExpandable
+                                      dialogError={error.message || error}
+                                      dialogErrorDetail={error.details} />}
+                <Form id="kdump-settings-form" isHorizontal>
+                    <FormGroup fieldId="kdump-settings-location" label={_("Location")}>
+                        <FormSelect key="location" onChange={(_, val) => changeStorageLocation(val)}
+                                    id="kdump-settings-location" value={storageLocation}>
+                            <FormSelectOption value='local'
+                                              label={_("Local filesystem")} />
+                            <FormSelectOption value='ssh'
+                                              label={_("Remote over SSH")} />
+                            <FormSelectOption value='nfs'
+                                              label={_("Remote over NFS")} />
+                        </FormSelect>
                     </FormGroup>
-                }
 
-                {storageLocation === "nfs" &&
-                    <>
-                        <FormGroup fieldId="kdump-settings-nfs-server" label={_("Server")} isRequired>
-                            <TextInput id="kdump-settings-nfs-server" key="server"
-                                    placeholder="penguin.example.com" value={server}
-                                    onChange={(_event, value) => setServer(value)} isRequired />
-                        </FormGroup>
-                        <FormGroup fieldId="kdump-settings-nfs-export" label={_("Export")} isRequired>
-                            <TextInput id="kdump-settings-nfs-export" key="export"
-                                    placeholder="/export/cores" value={exportPath}
-                                    onChange={(_event, value) => setExportPath(value)} isRequired />
-                        </FormGroup>
-                        <FormGroup fieldId="kdump-settings-nfs-directory" label={_("Directory")} isRequired>
-                            <TextInput id="kdump-settings-nfs-directory" key="directory"
-                                    placeholder={DEFAULT_KDUMP_PATH} value={directory}
-                                    data-stored={directory}
-                                    onChange={(_event, value) => setDirectory(value)}
-                                    isRequired />
-                        </FormGroup>
-                    </>
-                }
-
-                {storageLocation === "ssh" &&
-                    <>
-                        <FormGroup fieldId="kdump-settings-ssh-server" label={_("Server")} isRequired>
-                            <TextInput id="kdump-settings-ssh-server" key="server"
-                                       placeholder="user@server.com" value={server}
-                                       onChange={(_event, value) => setServer(value)} isRequired />
-                        </FormGroup>
-
-                        <FormGroup fieldId="kdump-settings-ssh-key" label={_("SSH key")}>
-                            <TextInput id="kdump-settings-ssh-key" key="ssh"
-                                       placeholder="/root/.ssh/kdump_id_rsa" value={sshkey}
-                                       onChange={(_event, value) => changeSSHKey(value)}
-                                       validated={validationErrors.sshkey ? "error" : "default"} />
-                            <FormHelper helperTextInvalid={validationErrors.sshkey} />
-                        </FormGroup>
-
-                        <FormGroup fieldId="kdump-settings-ssh-directory" label={_("Directory")} isRequired>
-                            <TextInput id="kdump-settings-ssh-directory" key="directory"
+                    {storageLocation === "local" &&
+                        <FormGroup fieldId="kdump-settings-local-directory" label={_("Directory")} isRequired>
+                            <TextInput id="kdump-settings-local-directory" key="directory"
                                        placeholder={DEFAULT_KDUMP_PATH} value={directory}
                                        data-stored={directory}
                                        onChange={(_event, value) => setDirectory(value)}
                                        isRequired />
                         </FormGroup>
-                    </>
-                }
+                    }
 
-                <FormSection>
-                    <FormGroup fieldId="kdump-settings-compression" label={_("Compression")} hasNoPaddingTop>
-                        <Checkbox id="kdump-settings-compression"
-                                  isChecked={compressionEnabled}
-                                  onChange={(_, c) => setCompressionEnabled(c)}
-                                  isDisabled={!compressionAllowed}
-                                  label={_("Compress crash dumps to save space")} />
-                    </FormGroup>
-                </FormSection>
-            </Form>
+                    {storageLocation === "nfs" &&
+                        <>
+                            <FormGroup fieldId="kdump-settings-nfs-server" label={_("Server")} isRequired>
+                                <TextInput id="kdump-settings-nfs-server" key="server"
+                                        placeholder="penguin.example.com" value={server}
+                                        onChange={(_event, value) => setServer(value)} isRequired />
+                            </FormGroup>
+                            <FormGroup fieldId="kdump-settings-nfs-export" label={_("Export")} isRequired>
+                                <TextInput id="kdump-settings-nfs-export" key="export"
+                                        placeholder="/export/cores" value={exportPath}
+                                        onChange={(_event, value) => setExportPath(value)} isRequired />
+                            </FormGroup>
+                            {settings.nfs_supports_directory &&
+                                <FormGroup fieldId="kdump-settings-nfs-directory" label={_("Directory")} isRequired>
+                                    <TextInput id="kdump-settings-nfs-directory" key="directory"
+                                            placeholder={DEFAULT_KDUMP_PATH} value={directory}
+                                            data-stored={directory}
+                                            onChange={(_event, value) => setDirectory(value)}
+                                            isRequired />
+                                </FormGroup>
+                            }
+                        </>
+                    }
+
+                    {storageLocation === "ssh" &&
+                        <>
+                            <FormGroup fieldId="kdump-settings-ssh-server" label={_("Server")} isRequired>
+                                <TextInput id="kdump-settings-ssh-server" key="server"
+                                           placeholder="user@server.com" value={server}
+                                           onChange={(_event, value) => setServer(value)} isRequired />
+                            </FormGroup>
+
+                            <FormGroup fieldId="kdump-settings-ssh-key" label={_("SSH key")}>
+                                <TextInput id="kdump-settings-ssh-key" key="ssh"
+                                           placeholder="/root/.ssh/kdump_id_rsa" value={sshkey}
+                                           onChange={(_event, value) => changeSSHKey(value)}
+                                           validated={validationErrors.sshkey ? "error" : "default"} />
+                                <FormHelper helperTextInvalid={validationErrors.sshkey} />
+                            </FormGroup>
+
+                            <FormGroup fieldId="kdump-settings-ssh-directory" label={_("Directory")} isRequired>
+                                <TextInput id="kdump-settings-ssh-directory" key="directory"
+                                           placeholder={DEFAULT_KDUMP_PATH} value={directory}
+                                           data-stored={directory}
+                                           onChange={(_event, value) => setDirectory(value)}
+                                           isRequired />
+                            </FormGroup>
+                        </>
+                    }
+
+                    <FormSection>
+                        <FormGroup fieldId="kdump-settings-compression" label={_("Compression")} hasNoPaddingTop>
+                            <Checkbox id="kdump-settings-compression"
+                                      isChecked={compressionEnabled}
+                                      onChange={(_, c) => setCompressionEnabled(c)}
+                                      isDisabled={!compressionAllowed}
+                                      label={_("Compress crash dumps to save space")} />
+                        </FormGroup>
+                    </FormSection>
+                </Form>
+            </ModalBody>
+            <ModalFooter>
+                <Button variant="primary"
+                        isLoading={isSaving}
+                        isDisabled={isSaving || !isFormValid || Object.keys(validationErrors).length !== 0}
+                        onClick={saveSettings}>
+                    {_("Save changes")}
+                </Button>
+                <Button variant="link"
+                        isDisabled={isSaving}
+                        className="cancel"
+                        onClick={Dialogs.close}>
+                    {_("Cancel")}
+                </Button>
+            </ModalFooter>
         </Modal>);
 };
 
@@ -351,33 +358,32 @@ export class KdumpPage extends React.Component {
         const target = this.props.kdumpStatus.target;
         let verifyMessage;
         if (!target.multipleTargets) {
-            const path = getLocation(target);
+            const path = getLocation(target, this.props.kdumpStatus.config);
             if (target.type === "local") {
                 verifyMessage = fmt_to_fragments(
                     ' ' + _("Results of the crash will be stored in $0 as $1, if kdump is properly configured."),
-                    <span className="pf-v5-u-font-family-monospace-vf">{path}</span>,
-                    <span className="pf-v5-u-font-family-monospace-vf">vmcore</span>);
+                    <span className="pf-v6-u-font-family-monospace-vf">{path}</span>,
+                    <span className="pf-v6-u-font-family-monospace-vf">vmcore</span>);
             } else if (target.type === "ssh" || target.type == "nfs") {
                 verifyMessage = fmt_to_fragments(
                     ' ' + _("Results of the crash will be copied through $0 to $1 as $2, if kdump is properly configured."),
-                    <span className="pf-v5-u-font-family-monospace-vf">{target.type === "ssh" ? "SSH" : "NFS"}</span>,
-                    <span className="pf-v5-u-font-family-monospace-vf">{path}</span>,
-                    <span className="pf-v5-u-font-family-monospace-vf">vmcore</span>);
+                    <span className="pf-v6-u-font-family-monospace-vf">{target.type === "ssh" ? "SSH" : "NFS"}</span>,
+                    <span className="pf-v6-u-font-family-monospace-vf">{path}</span>,
+                    <span className="pf-v6-u-font-family-monospace-vf">vmcore</span>);
             }
         }
 
         // open a dialog to confirm crashing the kernel to test the settings - then do it
         const dialogProps = {
             title: _("Test kdump settings"),
-            body: (<TextContent>
-                <Text component={TextVariants.p}>
+            body: (<Content>
+                <Content component={ContentVariants.p}>
                     {_("Test kdump settings by crashing the kernel. This may take a while and the system might not automatically reboot. Do not purposefully crash the system while any important task is running.")}
-                </Text>
-                {verifyMessage && <Text component={TextVariants.p}>
+                </Content>
+                {verifyMessage && <Content component={ContentVariants.p}>
                     {verifyMessage}
-                </Text>}
-            </TextContent>),
-            showClose: true,
+                </Content>}
+            </Content>),
             titleIconVariant: "warning",
         };
         // also test modifying properties in subsequent render calls
@@ -414,19 +420,31 @@ export class KdumpPage extends React.Component {
 # A reboot will be required if crashkernel was not set before
 kdumpctl reset-crashkernel`;
         }
-        const shell = `
+        let shell;
+        if (this.state.os_release.NAME?.includes('MicroOS')) {
+            enableCrashKernel = `
+# A reboot will be required if crashkernel was not set before
+transactional-update setup-kdump`;
+            shell = `
+cat > /etc/kdump.conf << EOF
+ ${kdumpconf}
+EOF
+${enableCrashKernel}
+        `;
+        } else {
+            shell = `
 cat > /etc/kdump.conf << EOF
 ${kdumpconf}
 EOF
 systemctl enable --now kdump.service
 ${enableCrashKernel}
 `;
+        }
 
         Dialogs.show(
             <ModificationsExportDialog
-              ansible={exportAnsibleTask(this.props.kdumpStatus.config, this.state.os_release)}
+              ansible={ this.state.os_release.NAME?.includes('MicroOS') ? null : exportAnsibleTask(this.props.kdumpStatus.config, this.state.os_release)}
               shell={shell}
-              show
               onClose={Dialogs.close}
             />);
     }
@@ -445,7 +463,7 @@ ${enableCrashKernel}
             if (target.multipleTargets) {
                 kdumpLocation = _("invalid: multiple targets defined");
             } else {
-                const locationPath = getLocation(target);
+                const locationPath = getLocation(target, this.props.kdumpStatus.config);
                 if (target.type == "local") {
                     kdumpLocation = cockpit.format(_("Local, $0"), locationPath);
                     targetCanChange = true;
@@ -537,8 +555,8 @@ ${enableCrashKernel}
             kdumpSwitch = (<Switch isChecked={!!serviceRunning}
                 onChange={this.props.onSetServiceState}
                 aria-label={_("kdump status")}
+                label={serviceRunning ? _("Enabled") : _("Disabled")}
                 isDisabled={this.props.stateChanging} />);
-            kdumpSwitchHelper = serviceRunning ? _("Enabled") : _("Disabled");
         }
 
         let alertMessage;
@@ -548,20 +566,20 @@ ${enableCrashKernel}
                 if (this.props.reservedMemory == 0) {
                     alertMessage = fmt_to_fragments(
                         _("Kernel did not boot with the $0 setting"),
-                        <span className="pf-v5-u-font-family-monospace-vf">crashkernel</span>
+                        <span className="pf-v6-u-font-family-monospace-vf">crashkernel</span>
                     );
                     alertDetail = fmt_to_fragments(
                         _("Reserve memory at boot time by setting a '$0' option on the kernel command line. For example, append '$1' to $2  in $3 or use your distribution's kernel argument editor."),
-                        <span className="pf-v5-u-font-family-monospace-vf">crashkernel</span>,
-                        <span className="pf-v5-u-font-family-monospace-vf">crashkernel=512M</span>,
-                        <span className="pf-v5-u-font-family-monospace-vf">GRUB_CMDLINE_LINUX</span>,
-                        <span className="pf-v5-u-font-family-monospace-vf">/etc/default/grub</span>
+                        <span className="pf-v6-u-font-family-monospace-vf">crashkernel</span>,
+                        <span className="pf-v6-u-font-family-monospace-vf">crashkernel=512M</span>,
+                        <span className="pf-v6-u-font-family-monospace-vf">GRUB_CMDLINE_LINUX</span>,
+                        <span className="pf-v6-u-font-family-monospace-vf">/etc/default/grub</span>
                     );
                 } else if (this.props.kdumpStatus.state == "failed") {
                     alertMessage = (
                         <>
                             {_("Service has an error")}
-                            <Button variant="link" isInline className="pf-v5-u-ml-sm" onClick={this.handleServiceDetailsClick}>{_("more details")}</Button>
+                            <Button variant="link" isInline className="pf-v6-u-ml-sm" onClick={this.handleServiceDetailsClick}>{_("more details")}</Button>
                         </>
                     );
                 }
@@ -569,36 +587,37 @@ ${enableCrashKernel}
                 alertMessage = _("Kdump service is not installed.");
                 alertDetail = fmt_to_fragments(
                     _("Install the $0 package."),
-                    <span className="pf-v5-u-font-family-monospace-vf">kexec-tools</span>
+                    <span className="pf-v6-u-font-family-monospace-vf">kexec-tools</span>
                 );
             }
         }
         return (
-            <Page>
-                <PageSection variant={PageSectionVariants.light}>
+            <Page className='no-masthead-sidebar'>
+                <PageSection hasBodyWrapper={false}>
                     <Flex spaceItems={{ default: 'spaceItemsMd' }} alignItems={{ default: 'alignItemsCenter' }}>
                         <Title headingLevel="h2" size="3xl">
                             {_("Kernel crash dump")}
                         </Title>
                         {kdumpSwitch}
-                        <HelperText>
-                            <HelperTextItem variant="indeterminate">{kdumpSwitchHelper}</HelperTextItem>
-                        </HelperText>
+                        {kdumpSwitchHelper &&
+                            <HelperText className="subtle-helper-text">
+                                <HelperTextItem>{kdumpSwitchHelper}</HelperTextItem>
+                            </HelperText>}
                         {automationButton}
                     </Flex>
                 </PageSection>
-                <PageSection>
+                <PageSection hasBodyWrapper={false}>
 
                     {alertMessage &&
                         <Alert variant='danger'
-                            className="pf-v5-u-mb-md"
+                            className="pf-v6-u-mb-md"
                             isLiveRegion={this.props.isLiveRegion}
                             isInline
                             title={alertMessage}>
                             {alertDetail}
                         </Alert>
                     }
-                    <Card>
+                    <Card isPlain>
                         <CardTitle>
                             <Title headingLevel="h4" size="xl">
                                 {_("Kdump settings")}

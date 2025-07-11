@@ -248,6 +248,24 @@ add_oauth_to_environment (JsonObject *environment)
   }
 }
 
+static bool have_command (const char *name)
+{
+    gint status;
+    g_autoptr(GError) error = NULL;
+    g_autofree gchar *command = g_strdup_printf ("command -v %s", name);
+    if (g_spawn_sync (NULL,
+                    (gchar * []){ "/bin/sh", "-ec", command, NULL },
+                    NULL,
+                    G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL,
+                    NULL, NULL, NULL, NULL, &status, &error))
+      return status == 0;
+    else
+      {
+        g_warning ("Failed to check for %s: %s", name, error->message);
+        return FALSE;
+      }
+}
+
 static void
 add_page_to_environment (JsonObject *object,
                          gboolean    is_cockpit_client)
@@ -266,9 +284,11 @@ add_page_to_environment (JsonObject *object,
 
   if (page_login_to < 0)
     {
-      page_login_to = cockpit_conf_bool ("WebService", "LoginTo",
-                                         g_file_test (cockpit_ws_ssh_program,
-                                                      G_FILE_TEST_IS_EXECUTABLE));
+      /* cockpit.beiboot is part of cockpit-bridge package */
+      gboolean have_ssh = have_command ("ssh") && have_command ("cockpit-bridge");
+      if (!have_ssh)
+        g_info ("cockpit-bridge or ssh are not available, disabling remote logins");
+      page_login_to = cockpit_conf_bool ("WebService", "LoginTo", have_ssh);
     }
 
   require_host = is_cockpit_client || cockpit_conf_bool ("WebService", "RequireHost", FALSE);
@@ -320,31 +340,15 @@ add_logged_into_to_environment (JsonObject *object,
 }
 
 static GBytes *
-build_environment (GHashTable *os_release, CockpitAuth *auth, GHashTable *request_headers)
+build_environment (CockpitAuth *auth, GHashTable *request_headers)
 {
-  /*
-   * We don't include entirety of os-release into the
-   * environment for the login.html page. There could
-   * be unexpected things in here.
-   *
-   * However since we are displaying branding based on
-   * the OS name variant flavor and version, including
-   * the corresponding information is not a leak.
-   */
-  static const gchar *release_fields[] = {
-    "NAME", "ID", "PRETTY_NAME", "VARIANT", "VARIANT_ID", "CPE_NAME", "ID_LIKE", "DOCUMENTATION_URL"
-  };
-
   static const gchar *prefix = "\n    <script>\nvar environment = ";
   static const gchar *suffix = ";\n    </script>";
 
   GByteArray *buffer;
   GBytes *bytes;
   JsonObject *object;
-  const gchar *value;
   gchar *hostname;
-  JsonObject *osr;
-  gint i;
 
   object = json_object_new ();
 
@@ -359,18 +363,6 @@ build_environment (GHashTable *os_release, CockpitAuth *auth, GHashTable *reques
   hostname[HOST_NAME_MAX] = '\0';
   json_object_set_string_member (object, "hostname", hostname);
   g_free (hostname);
-
-  if (os_release)
-    {
-      osr = json_object_new ();
-      for (i = 0; i < G_N_ELEMENTS (release_fields); i++)
-        {
-          value = g_hash_table_lookup (os_release, release_fields[i]);
-          if (value)
-            json_object_set_string_member (osr, release_fields[i], value);
-        }
-      json_object_set_object_member (object, "os-release", osr);
-    }
 
   add_oauth_to_environment (object);
 
@@ -429,7 +421,7 @@ send_login_html (CockpitWebResponse *response,
   GBytes *po_bytes;
   CockpitWebFilter *filter3 = NULL;
 
-  environment = build_environment (ws->os_release, ws->auth, headers);
+  environment = build_environment (ws->auth, headers);
   filter = cockpit_web_inject_new (marker, environment, 1);
   g_bytes_unref (environment);
   cockpit_web_response_add_filter (response, filter);
@@ -689,6 +681,17 @@ cockpit_handler_default (CockpitWebServer *server,
 
   path = cockpit_web_response_get_path (response);
   g_return_val_if_fail (path != NULL, FALSE);
+
+  /* robots.txt is unauthorized and works on any directory */
+  if (g_str_has_suffix (path, "/robots.txt"))
+    {
+      g_autoptr(GHashTable) out_headers = cockpit_web_server_new_table ();
+      g_hash_table_insert (out_headers, g_strdup ("Content-Type"), g_strdup ("text/plain"));
+      const char *body ="User-agent: *\nDisallow: /\n";
+      g_autoptr(GBytes) content = g_bytes_new_static (body, strlen (body));
+      cockpit_web_response_content (response, out_headers, content, NULL);
+      return TRUE;
+    }
 
   resource = g_str_has_prefix (path, "/cockpit/") ||
              g_str_has_prefix (path, "/cockpit+") ||

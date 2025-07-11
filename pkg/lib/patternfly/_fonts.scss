@@ -1,3 +1,8 @@
+// NOTE @Venefilyn: This is here for backwards compatibility. The file should be removed at some point.
+// There are scenarios such as running tests for a plugin with a stable cockpit-shell/ws
+// Since those may be older, for now we should include the old fonts to make sure that the plugins
+// This allows plugins to still utilize the Red Hat fonts when testing plugins on or before Cockpit v336
+
 @mixin printRedHatFont(
   $weightValue: 400,
   $weightName: "Regular",
@@ -13,6 +18,7 @@
     font-style: #{$style};
     font-weight: $weightValue;
     text-rendering: optimizelegibility;
+    font-display: fallback;
   }
 }
 

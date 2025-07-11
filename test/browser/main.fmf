@@ -8,7 +8,6 @@
     # - cockpit-networkmanager
     # - cockpit-sosreport
     - cockpit-packagekit
-    - cockpit-tests
     # build/test infra dependencies
     - podman
     # required by tests
@@ -36,7 +35,7 @@
     - cockpit
     - cockpit-storaged
     # for at least swap metrics on storage page
-    - cockpit-pcp
+    - python3-pcp
     # build/test infra dependencies
     - podman
     # required by tests
@@ -44,9 +43,11 @@
     - dnf-automatic
     - firewalld
     - lvm2
+    - mdadm
     - nfs-utils
     - stratis-cli
     - stratisd
+    - stratisd-tools
     - subscription-manager
     - targetcli
     - udisks2-lvm2
@@ -61,7 +62,7 @@
     - cockpit
     - cockpit-storaged
     # for at least swap metrics on storage page
-    - cockpit-pcp
+    - python3-pcp
     # build/test infra dependencies
     - podman
     # required by tests

@@ -18,6 +18,7 @@
 import argparse
 import asyncio
 import contextlib
+import grp
 import json
 import logging
 import os
@@ -26,7 +27,7 @@ import shlex
 import socket
 import stat
 import subprocess
-from typing import Iterable, List, Optional, Sequence, Tuple, Type
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Type
 
 from cockpit._vendor.ferny import interaction_client
 from cockpit._vendor.systemd_ctypes import bus, run_async
@@ -37,7 +38,7 @@ from .channel import ChannelRoutingRule
 from .channels import CHANNEL_TYPES
 from .config import Config, Environment
 from .internal_endpoints import EXPORTS
-from .jsonutil import JsonError, JsonObject, get_dict
+from .jsonutil import JsonError, JsonObject, JsonValue, get_dict
 from .packages import BridgeConfig, Packages, PackagesListener
 from .peer import PeersRoutingRule
 from .remote import HostRoutingRule
@@ -62,6 +63,7 @@ class InternalBus:
 
 
 class Bridge(Router, PackagesListener):
+    channels: ChannelRoutingRule
     internal_bus: InternalBus
     packages: Optional[Packages]
     bridge_configs: Sequence[BridgeConfig]
@@ -97,15 +99,43 @@ class Bridge(Router, PackagesListener):
             self.internal_bus.export('/packages', self.packages)
             self.packages_loaded()
 
+        self.channels = ChannelRoutingRule(self, CHANNEL_TYPES)
+
         super().__init__([
             HostRoutingRule(self),
             self.superuser_rule,
-            ChannelRoutingRule(self, CHANNEL_TYPES),
+            self.channels,
             self.peers_rule,
         ])
 
+    def info(self) -> JsonObject:
+        pw = pwd.getpwuid(os.getuid())
+
+        # We want the primary group first in the list, without duplicates.
+        # This is a bit awkward because `set()` is unordered...
+        group = grp.getgrgid(pw.pw_gid).gr_name
+        groups = [group]
+        for gr in grp.getgrall():
+            if pw.pw_name in gr.gr_mem and gr.gr_name not in groups:
+                groups.append(gr.gr_name)
+
+        return {
+            'channels': self.channels.capabilities(),
+            'os_release': self.get_os_release(),
+            'user': {
+                'fullname': pw.pw_gecos,
+                'gid': pw.pw_gid,
+                'group': group,
+                'groups': groups,
+                'home': pw.pw_dir,
+                'name': pw.pw_name,
+                'shell': pw.pw_shell,
+                'uid': pw.pw_uid,
+            },
+        }
+
     @staticmethod
-    def get_os_release():
+    def get_os_release() -> JsonObject:
         try:
             file = open('/etc/os-release', encoding='utf-8')
         except FileNotFoundError:
@@ -115,19 +145,7 @@ class Bridge(Router, PackagesListener):
                 logger.warning("Neither /etc/os-release nor /usr/lib/os-release exists")
                 return {}
 
-        os_release = {}
-        for line in file.readlines():
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            try:
-                k, v = line.split('=')
-                (v_parsed, ) = shlex.split(v)  # expect exactly one token
-            except ValueError:
-                logger.warning('Ignoring invalid line in os-release: %r', line)
-                continue
-            os_release[k] = v_parsed
-        return os_release
+        return parse_os_release(file.read())
 
     def do_init(self, message: JsonObject) -> None:
         # we're only interested in the case where this is a dict, but
@@ -137,7 +155,7 @@ class Bridge(Router, PackagesListener):
             self.superuser_rule.init(superuser)
 
     def do_send_init(self) -> None:
-        init_args = {
+        init_args: 'dict[str, JsonValue]' = {
             'capabilities': {'explicit-superuser': True},
             'command': 'init',
             'os-release': self.get_os_release(),
@@ -240,6 +258,22 @@ def setup_logging(*, debug: bool) -> None:
                 continue
 
             logging.getLogger(module).setLevel(logging.DEBUG)
+
+
+def parse_os_release(text: str) -> Dict[str, str]:
+    os_release = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        try:
+            k, v = line.split('=')
+            (v_parsed, ) = shlex.split(v)  # expect exactly one token
+        except ValueError:
+            logger.warning('Ignoring invalid line in os-release: %r', line)
+            continue
+        os_release[k] = v_parsed
+    return os_release
 
 
 def start_ssh_agent() -> None:

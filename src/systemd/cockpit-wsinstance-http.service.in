@@ -2,8 +2,21 @@
 Description=Cockpit Web Service http instance
 Documentation=man:cockpit-ws(8)
 BindsTo=cockpit.service
+Requires=cockpit-session.socket
+After=cockpit-session.socket
 
 [Service]
 ExecStart=@libexecdir@/cockpit-ws --no-tls --port=0
-User=cockpit-wsinstance
-Group=cockpit-wsinstance
+DynamicUser=yes
+Group=cockpit-session-socket
+
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectSystem=strict
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+
+# cockpit-tls does all our outside web related networking, but ws also calls ssh
+PrivateIPC=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

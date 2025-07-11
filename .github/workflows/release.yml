@@ -8,8 +8,7 @@ on:
 
 jobs:
   source:
-    # 22.04's podman has issues with piping and causes tar errors
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     permissions:
       # create GitHub release
       contents: write
@@ -94,6 +93,8 @@ jobs:
   flathub:
     needs: source
     environment: flathub
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     permissions: {}
     runs-on: ubuntu-latest
     steps:
@@ -134,6 +135,10 @@ jobs:
           git commit -m "Update to version ${{ github.ref_name }}"
           git show
           git push git@github.com:cockpit-project/org.cockpit_project.CockpitClient HEAD
+          gh pr create \
+            --fill \
+            -H cockpit-project:${{ github.ref_name }} \
+            -R flathub/org.cockpit_project.CockpitClient
 
 
   node-cache:

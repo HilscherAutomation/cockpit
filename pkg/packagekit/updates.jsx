@@ -16,7 +16,7 @@
  * You should have received a copy of the GNU Lesser General Public License
  * along with Cockpit; If not, see <https://www.gnu.org/licenses/>.
  */
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
 import 'polyfills'; // once per application
 import 'cockpit-dark-theme'; // once per page
 
@@ -29,7 +29,9 @@ import { Badge } from "@patternfly/react-core/dist/esm/components/Badge/index.js
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
 import { CodeBlock, CodeBlockCode } from "@patternfly/react-core/dist/esm/components/CodeBlock/index.js";
 import { Gallery } from "@patternfly/react-core/dist/esm/layouts/Gallery/index.js";
-import { Modal } from "@patternfly/react-core/dist/esm/components/Modal/index.js";
+import {
+    Modal, ModalBody, ModalFooter, ModalHeader
+} from '@patternfly/react-core/dist/esm/components/Modal/index.js';
 import { Popover } from "@patternfly/react-core/dist/esm/components/Popover/index.js";
 import { Tooltip } from "@patternfly/react-core/dist/esm/components/Tooltip/index.js";
 import { Card, CardBody, CardHeader, CardTitle } from '@patternfly/react-core/dist/esm/components/Card/index.js';
@@ -38,12 +40,12 @@ import { ExpandableSection } from "@patternfly/react-core/dist/esm/components/Ex
 import { Flex, FlexItem } from "@patternfly/react-core/dist/esm/layouts/Flex/index.js";
 import { Grid, GridItem } from "@patternfly/react-core/dist/esm/layouts/Grid/index.js";
 import { LabelGroup } from "@patternfly/react-core/dist/esm/components/Label/index.js";
-import { Page, PageSection, PageSectionVariants } from "@patternfly/react-core/dist/esm/components/Page/index.js";
+import { Page, PageSection, } from "@patternfly/react-core/dist/esm/components/Page/index.js";
 import { Progress, ProgressSize } from "@patternfly/react-core/dist/esm/components/Progress/index.js";
 import { Spinner } from "@patternfly/react-core/dist/esm/components/Spinner/index.js";
 import { Stack, StackItem } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
 import { Switch } from "@patternfly/react-core/dist/esm/components/Switch/index.js";
-import { Text, TextContent, TextList, TextListItem, TextVariants } from "@patternfly/react-core/dist/esm/components/Text/index.js";
+import { Content, ContentVariants } from "@patternfly/react-core/dist/esm/components/Content/index.js";
 
 import {
     BugIcon,
@@ -56,7 +58,7 @@ import {
     ProcessAutomationIcon,
     SecurityIcon,
 } from "@patternfly/react-icons";
-import { cellWidth, TableText } from "@patternfly/react-table";
+import { TableText } from "@patternfly/react-table";
 import { Remarkable } from "remarkable";
 
 import { AutoUpdates, getBackend } from "./autoupdates.jsx";
@@ -71,9 +73,10 @@ import { WithDialogs } from "dialogs.jsx";
 
 import { superuser } from 'superuser';
 import * as PK from "packagekit.js";
+import * as python from "python.js";
 import * as timeformat from "timeformat";
 
-import * as python from "python.js";
+import { debug } from './utils';
 import callTracerScript from './callTracer.py';
 
 import "./updates.scss";
@@ -388,7 +391,7 @@ function updateItem(remarkable, info, pkgNames, key) {
                     </DescriptionListGroup>
                     : null }
             </DescriptionList>
-            <TextContent>{description}</TextContent>
+            <Content>{description}</Content>
         </Flex>
     );
 
@@ -444,10 +447,10 @@ const UpdatesList = ({ updates }) => {
         <ListingTable aria-label={_("Available updates")}
                 gridBreakPoint='grid-lg'
                 columns={[
-                    { title: _("Name"), transforms: [cellWidth(40)] },
-                    { title: _("Version"), transforms: [cellWidth(15)] },
-                    { title: _("Severity"), transforms: [cellWidth(15)] },
-                    { title: _("Details"), transforms: [cellWidth(30)] },
+                    { title: _("Name"), props: { width: 40 } },
+                    { title: _("Version"), props: { width: 15 } },
+                    { title: _("Severity"), props: { width: 15 } },
+                    { title: _("Details"), props: { width: 30 } },
                 ]}
                 rows={update_ids.map(id => updateItem(remarkable, updates[id], packageNames[id].sort((a, b) => a.name > b.name), id))} />
     );
@@ -476,18 +479,18 @@ class RestartServices extends React.Component {
 
     restart() {
         // make sure cockpit package is the last to restart
-        const daemons = this.props.tracerPackages.daemons.sort((a, b) => {
+        const daemons = this.props.restartPackages.daemons.sort((a, b) => {
             if (a.includes("cockpit") && b.includes("cockpit"))
                 return 0;
             if (a.includes("cockpit"))
                 return 1;
             return a.localeCompare(b);
         });
-        const restarts = daemons.map(service => cockpit.spawn(["systemctl", "restart", service + ".service"], { superuser: "required", err: "message" }));
+        const restarts = daemons.map(service => cockpit.spawn(["systemctl", "restart", service], { superuser: "required", err: "message" }));
         this.setState({ restartInProgress: true });
         Promise.all(restarts)
                 .then(() => {
-                    this.props.onValueChanged({ tracerPackages: { reboot: this.props.tracerPackages.reboot, daemons: [], manual: this.props.tracerPackages.manual } });
+                    this.props.onValueChanged({ restartPackages: { reboot: this.props.restartPackages.reboot, daemons: [], manual: this.props.restartPackages.manual } });
                     if (this.props.state === "updateSuccess")
                         this.props.loadUpdates();
                     this.setState({ restartInProgress: false });
@@ -495,24 +498,24 @@ class RestartServices extends React.Component {
                 })
                 .catch(ex => {
                     this.dialogErrorSet(_("Failed to restart service"), ex.message);
-                    // call Tracer again to see what services remain
-                    this.props.callTracer(null);
+                    // see what services remain
+                    this.props.checkNeedsRestart();
                 });
     }
 
     render() {
         let body;
-        if (this.props.tracerRunning) {
+        if (this.props.checkRestartRunning) {
             body = (
                 <Flex spaceItems={{ default: 'spaceItemsSm' }} alignItems={{ default: 'alignItemsCenter' }}>
                     <Spinner size="sm" />
                     <p>{_("Reloading the state of remaining services")}</p>
                 </Flex>
             );
-        } else if (this.props.tracerPackages.daemons.length > 0) {
+        } else if (this.props.restartPackages.daemons.length > 0) {
             body = (<>
-                {cockpit.ngettext("The following service will be restarted:", "The following services will be restarted:", this.props.tracerPackages.daemons.length)}
-                <TwoColumnContent list={this.props.tracerPackages.daemons} flexClassName="restart-services-modal-body" />
+                {cockpit.ngettext("The following service will be restarted:", "The following services will be restarted:", this.props.restartPackages.daemons.length)}
+                <TwoColumnContent list={this.props.restartPackages.daemons} flexClassName="restart-services-modal-body" />
             </>);
         }
 
@@ -520,32 +523,32 @@ class RestartServices extends React.Component {
             <Modal id="restart-services-modal" isOpen
                    position="top"
                    variant="medium"
-                   onClose={this.props.close}
-                   title={_("Restart services")}
-                   footer={
-                       <>
-                           {this.props.tracerPackages.daemons.includes("cockpit") &&
-                               <Alert variant="warning"
-                                   title={_("Web Console will restart")}
-                                   isInline>
-                                   <p>
-                                       {_("When the Web Console is restarted, you will no longer see progress information. However, the update process will continue in the background. Reconnect to continue watching the update process.")}
-                                   </p>
-                               </Alert>}
-                           <Button variant='primary'
-                               isDisabled={ this.state.restartInProgress }
-                               onClick={ this.restart }>
-                               {_("Restart services")}
-                           </Button>
-                           <Button variant='link' className='btn-cancel' onClick={ this.props.close }>
-                               {_("Cancel")}
-                           </Button>
-                       </>
-                   }>
-                <Stack hasGutter>
-                    {this.state.dialogError && <ModalError dialogError={this.state.dialogError} dialogErrorDetail={this.state.dialogErrorDetail} />}
-                    <StackItem>{body}</StackItem>
-                </Stack>
+                   onClose={this.props.close}>
+                <ModalHeader title={_("Restart services")} />
+                <ModalBody>
+                    <Stack hasGutter>
+                        {this.state.dialogError && <ModalError dialogError={this.state.dialogError} dialogErrorDetail={this.state.dialogErrorDetail} />}
+                        <StackItem>{body}</StackItem>
+                    </Stack>
+                </ModalBody>
+                <ModalFooter>
+                    {this.props.restartPackages.daemons.includes("cockpit") &&
+                        <Alert variant="warning"
+                            title={_("Web Console will restart")}
+                            isInline>
+                            <p>
+                                {_("When the Web Console is restarted, you will no longer see progress information. However, the update process will continue in the background. Reconnect to continue watching the update process.")}
+                            </p>
+                        </Alert>}
+                    <Button variant='primary'
+                        isDisabled={ this.state.restartInProgress }
+                        onClick={ this.restart }>
+                        {_("Restart services")}
+                    </Button>
+                    <Button variant='link' className='btn-cancel' onClick={ this.props.close }>
+                        {_("Cancel")}
+                    </Button>
+                </ModalFooter>
             </Modal>
         );
     }
@@ -593,7 +596,7 @@ const ApplyUpdates = ({ transactionProps, actions, onCancel, rebootAfter, setReb
     return (
         <div className="progress-main-view">
             <Grid hasGutter>
-                <GridItem span="9">
+                <GridItem span={12}>
                     <div className="progress-description">
                         <Spinner size="md" />
                         <strong>{ PK_STATUS_STRINGS[lastAction?.status] || PK_STATUS_STRINGS[PK.Enum.STATUS_UPDATE] }</strong>
@@ -602,18 +605,18 @@ const ApplyUpdates = ({ transactionProps, actions, onCancel, rebootAfter, setReb
                     <Progress title={remain}
                               value={percentage}
                               size={ProgressSize.sm}
-                              className="pf-v5-u-mb-xs" />
+                              className="pf-v6-u-mb-xs" />
                 </GridItem>
 
-                <GridItem span="3">{cancelButton}</GridItem>
+                <GridItem span={3}>{cancelButton}</GridItem>
 
-                <GridItem span="12">
+                <GridItem span={12}>
                     <Switch id="reboot-after" isChecked={rebootAfter}
                             label={ _("Reboot after completion") }
                             onChange={setRebootAfter} />
                 </GridItem>
 
-                <GridItem span="12" className="update-log">
+                <GridItem span={12} className="update-log">
                     <ExpandableSection toggleText={_("View update log")} onToggle={() => {
                         // always scroll down on expansion
                         const log = document.getElementById("update-log");
@@ -644,18 +647,14 @@ const TwoColumnContent = ({ list, flexClassName }) => {
     return (
         <Flex className={flexClassName}>
             <FlexItem flex={{ default: 'flex_1' }}>
-                <TextContent>
-                    <TextList>
-                        {col1.map(item => (<TextListItem key={item}>{item}</TextListItem>))}
-                    </TextList>
-                </TextContent>
+                <Content component="ul">
+                    {col1.map(item => (<Content component="li" key={item}>{item}</Content>))}
+                </Content>
             </FlexItem>
             {col2.length > 0 && <FlexItem flex={{ default: 'flex_1' }}>
-                <TextContent>
-                    <TextList>
-                        {col2.map(item => (<TextListItem key={item}>{item}</TextListItem>))}
-                    </TextList>
-                </TextContent>
+                <Content component="ul">
+                    {col2.map(item => (<Content component="li" key={item}>{item}</Content>))}
+                </Content>
             </FlexItem>}
         </Flex>
     );
@@ -670,8 +669,8 @@ const TwoColumnTitle = ({ icon, str }) => {
     </>);
 };
 
-const UpdateSuccess = ({ onIgnore, openServiceRestartDialog, openRebootDialog, restart, manual, reboot, tracerAvailable, history }) => {
-    if (!tracerAvailable) {
+const UpdateSuccess = ({ onIgnore, openServiceRestartDialog, openRebootDialog, restart, manual, reboot, checkRestartAvailable, history }) => {
+    if (!checkRestartAvailable) {
         /* tracer is not available any more in RHEL 10; as a special case, if only kpatch and kernel were
          * updated, don't reboot (as that's their whole raison d'être) */
         const pkgs = Object.keys(history[0] ?? {}).filter(p => p != "_time");
@@ -780,12 +779,12 @@ const UpdateSuccess = ({ onIgnore, openServiceRestartDialog, openRebootDialog, r
     </>);
 };
 
-const UpdatesStatus = ({ updates, highestSeverity, timeSinceRefresh, tracerPackages, onValueChanged }) => {
+const UpdatesStatus = ({ updates, highestSeverity, timeSinceRefresh, restartPackages, onValueChanged }) => {
     const numUpdates = Object.keys(updates).length;
     const numSecurity = count_security_updates(updates);
-    const numRestartServices = tracerPackages.daemons.length;
-    const numManualSoftware = tracerPackages.manual.length;
-    const numRebootPackages = tracerPackages.reboot.length;
+    const numRestartServices = restartPackages.daemons.length;
+    const numManualSoftware = restartPackages.manual.length;
+    const numRebootPackages = restartPackages.reboot.length;
     let lastChecked;
     // PackageKit returns G_MAXUINT if the db was never checked.
     if (timeSinceRefresh !== null && timeSinceRefresh !== 2 ** 32 - 1)
@@ -799,7 +798,7 @@ const UpdatesStatus = ({ updates, highestSeverity, timeSinceRefresh, tracerPacka
                 id: "security-updates-available",
                 stateStr: cockpit.format(stateStr, numSecurity),
                 icon: getSeverityIcon(highestSeverity),
-                secondary: <Text id="last-checked" component={TextVariants.small}>{lastChecked}</Text>
+                secondary: <Content id="last-checked" component={ContentVariants.small}>{lastChecked}</Content>
             });
         } else {
             let stateStr = cockpit.ngettext("$0 update available", "$0 updates available", numUpdates);
@@ -809,7 +808,7 @@ const UpdatesStatus = ({ updates, highestSeverity, timeSinceRefresh, tracerPacka
                 id: "updates-available",
                 stateStr: cockpit.format(stateStr, numUpdates, numSecurity),
                 icon: getSeverityIcon(highestSeverity),
-                secondary: <Text id="last-checked" component={TextVariants.small}>{lastChecked}</Text>
+                secondary: <Content id="last-checked" component={ContentVariants.small}>{lastChecked}</Content>
             });
         }
     } else if (!numRestartServices && !numRebootPackages && !numManualSoftware) {
@@ -817,7 +816,7 @@ const UpdatesStatus = ({ updates, highestSeverity, timeSinceRefresh, tracerPacka
             id: "system-up-to-date",
             stateStr: STATE_HEADINGS.uptodate,
             icon: <CheckIcon color="green" />,
-            secondary: <Text id="last-checked" component={TextVariants.small}>{lastChecked}</Text>
+            secondary: <Content id="last-checked" component={ContentVariants.small}>{lastChecked}</Content>
         });
     }
 
@@ -850,7 +849,7 @@ const UpdatesStatus = ({ updates, highestSeverity, timeSinceRefresh, tracerPacka
             id: "processes-need-restart",
             stateStr: _("Some software needs to be restarted manually"),
             icon: <ProcessAutomationIcon />,
-            secondary: <Text component={TextVariants.small}>{tracerPackages.manual.join(", ")}</Text>
+            secondary: <Content component={ContentVariants.small}>{restartPackages.manual.join(", ")}</Content>
         });
     }
 
@@ -864,7 +863,7 @@ const UpdatesStatus = ({ updates, highestSeverity, timeSinceRefresh, tracerPacka
                     <FlexItem>
                         <Stack>
                             <StackItem>
-                                <Text component={TextVariants.p}>{notification.stateStr}</Text>
+                                <Content component={ContentVariants.p}>{notification.stateStr}</Content>
                             </StackItem>
                             <StackItem>
                                 { notification.secondary }
@@ -896,7 +895,7 @@ class CardsPage extends React.Component {
             <UpdatesStatus key="updates-status"
                                 updates={this.props.updates}
                                 onValueChanged={this.props.onValueChanged}
-                                tracerPackages={this.props.tracerPackages}
+                                restartPackages={this.props.restartPackages}
                                 highestSeverity={this.props.highestSeverity}
                                 timeSinceRefresh={this.props.timeSinceRefresh} />
             <KpatchStatus />
@@ -1000,9 +999,9 @@ class OsUpdates extends React.Component {
             unregistered: false,
             privileged: false,
             autoUpdatesEnabled: undefined,
-            tracerPackages: { daemons: [], manual: [], reboot: [] },
-            tracerAvailable: false,
-            tracerRunning: false,
+            restartPackages: { daemons: [], manual: [], reboot: [] },
+            checkRestartAvailable: false,
+            checkRestartRunning: false,
             showRestartServicesDialog: false,
             showRebootSystemDialog: false,
             backend: "",
@@ -1012,6 +1011,7 @@ class OsUpdates extends React.Component {
         this.handleRefresh = this.handleRefresh.bind(this);
         this.loadUpdates = this.loadUpdates.bind(this);
         this.onValueChanged = this.onValueChanged.bind(this);
+        this.checkNeedsRestart = this.checkNeedsRestart.bind(this);
 
         superuser.addEventListener("changed", () => {
             this.setState({ privileged: superuser.allowed });
@@ -1027,7 +1027,7 @@ class OsUpdates extends React.Component {
 
     componentDidMount() {
         this._mounted = true;
-        this.callTracer(null);
+        this.checkNeedsRestart();
 
         PK.getBackendName().then(([prop]) => this.setState({ backend: prop.v }));
 
@@ -1066,38 +1066,110 @@ class OsUpdates extends React.Component {
         this._mounted = false;
     }
 
-    callTracer(state) {
-        this.setState({ tracerRunning: true });
-        python.spawn(callTracerScript, null, { err: "message", superuser: "require" })
+    checkNeedsRestart() {
+        this.setState({ checkRestartRunning: true });
+        return python.spawn(callTracerScript, undefined, { err: "message", superuser: "require" })
                 .then(output => {
-                    const tracerPackages = JSON.parse(output);
+                    debug("tracer succeeded, output:", output);
+                    const restartPackages = JSON.parse(output);
                     // Filter out duplicates
-                    tracerPackages.reboot = [...new Set(shortenCockpitWsInstance(tracerPackages.reboot))];
-                    tracerPackages.daemons = [...new Set(shortenCockpitWsInstance(tracerPackages.daemons))];
-                    tracerPackages.manual = [...new Set(shortenCockpitWsInstance(tracerPackages.manual))];
-                    const nextState = { tracerAvailable: true, tracerRunning: false, tracerPackages };
-                    if (state)
-                        nextState.state = state;
-
-                    this.setState(nextState);
+                    restartPackages.reboot = [...new Set(shortenCockpitWsInstance(restartPackages.reboot))];
+                    restartPackages.daemons = [...new Set(shortenCockpitWsInstance(restartPackages.daemons))];
+                    restartPackages.manual = [...new Set(shortenCockpitWsInstance(restartPackages.manual))];
+                    debug("tracer parsed restartPackages:", JSON.stringify(restartPackages));
+                    this.setState({ checkRestartAvailable: true, checkRestartRunning: false, restartPackages });
                 })
                 .catch((exception, data) => {
-                    // common cases: this platform does not have tracer installed
-                    if (!exception.message?.includes("ModuleNotFoundError") &&
-                        // or supported (like on Arch)
-                        !exception.message?.includes("UnsupportedDistribution") &&
-                        // or polkit does not allow it
-                        exception.problem !== "access-denied" &&
+                    // tracer not installed or supported (like on Arch)? then fall back to dnf needs-restarting
+                    if (exception.message?.includes("ModuleNotFoundError") ||
+                        exception.message?.includes("UnsupportedDistribution")) {
+                        debug('tracer not installed:', JSON.stringify(exception), "trying dnf needs-restarting");
+                        return this.checkDnfNeedsRestarting();
+                    }
+
+                    // log the error except for some common cases: polkit does not allow it
+                    if (exception.problem !== "access-denied" &&
                         // or unprivileged session
                         exception.problem !== "authentication-failed" &&
                         // or the session goes away while checking
                         exception.problem !== "terminated")
                         console.error(`Tracer failed: "${JSON.stringify(exception)}", data: "${JSON.stringify(data)}"`);
+                    else
+                        debug('tracer failed for uninteresting reason:', JSON.stringify(exception));
+
                     // When tracer fails, act like it's not available (demand reboot after every update)
-                    const nextState = { tracerAvailable: false, tracerRunning: false, tracerPackages: { reboot: [], daemons: [], manual: [] } };
-                    if (state)
-                        nextState.state = state;
-                    this.setState(nextState);
+                    this.setState({
+                        checkRestartAvailable: false,
+                        checkRestartRunning: false,
+                        restartPackages: { reboot: [], daemons: [], manual: [] },
+                    });
+                });
+    }
+
+    checkDnfNeedsRestarting() {
+        const restartPackages = { reboot: [], daemons: [], manual: [] };
+
+        // needs-restarting has no machine-readable API: https://issues.redhat.com/browse/RHEL-56139
+        // dnf5 needs-restarting also has no machine-readable API: https://github.com/rpm-software-management/dnf5/issues/2341
+        // --exclude-services was added much later, so check that first
+        return cockpit.spawn(["dnf", "needs-restarting", "--exclude-services"], { err: "message", superuser: "require" })
+                .then(outManual => {
+                    debug("dnf needs-restarting --exclude-services succeeded:", outManual);
+                    // format: "pid : argv", e.g. "1234 : mydaemon 3600"
+                    outManual.trim()
+                            .split("\n")
+                            // HACK: https://issues.redhat.com/browse/RHEL-84657
+                            .filter(line => line.match(/^\d+ : /))
+                            .forEach(line => !line || restartPackages.manual.push(line));
+
+                    return Promise.allSettled([
+                        cockpit.spawn(["dnf", "needs-restarting", "--services"], { err: "message", superuser: "require" }),
+                        // we can't get stdout for a failing process, thus needs script
+                        cockpit.script("! dnf needs-restarting --reboothint", undefined, { err: "message", superuser: "require" }),
+                    ])
+                            .then(([serviceResult, rebootResult]) => {
+                                // --services format: one unit name per line
+                                if (serviceResult.status == 'fulfilled') {
+                                    debug("dnf needs-restarting --services succeeded:", serviceResult.value);
+                                    serviceResult.value.trim()
+                                            .split("\n")
+                                            // HACK: https://issues.redhat.com/browse/RHEL-84657
+                                            .filter(line => line.endsWith(".service"))
+                                            .forEach(line => restartPackages.daemons.push(line));
+                                } else {
+                                    console.error("dnf needs-restarting --services failed:", JSON.stringify(serviceResult.reason));
+                                }
+
+                                // --reboothint format: "  * kernel-rt" plus header/footer; exit nonzero iff reboot required, inverted above
+                                if (rebootResult.status == 'fulfilled') {
+                                    debug("dnf needs-restarting --reboothint exited nonzero, wants reboot:", rebootResult.value);
+                                    rebootResult.value.split("\n").forEach(line => {
+                                        if (line.startsWith("  * "))
+                                            restartPackages.reboot.push(line.substring(4));
+                                    });
+                                } else {
+                                    debug("dnf needs-restarting --reboothint exited zero, no reboot");
+                                }
+
+                                debug("dnf needs-restarting parsed packages:", JSON.stringify(restartPackages));
+                                this.setState({ checkRestartAvailable: true, checkRestartRunning: false, restartPackages });
+                            });
+                })
+                .catch(ex => {
+                    // log the error except for some common cases: no dnf
+                    if (ex.problem !== "not-found" &&
+                        // plugin does not support --exclude-services
+                        !ex.message.includes("usage:") &&
+                        // polkit does not allow it
+                        ex.problem !== "access-denied" &&
+                        // or unprivileged session
+                        ex.problem !== "authentication-failed" &&
+                        // or the session goes away while checking
+                        ex.problem !== "terminated")
+                        console.error("dnf needs-restarting failed:", ex.toString());
+
+                    // act like it's not available (demand reboot after every update)
+                    this.setState({ checkRestartAvailable: false, checkRestartRunning: false, restartPackages });
                 });
     }
 
@@ -1286,17 +1358,18 @@ class OsUpdates extends React.Component {
                                            this.setState({ applyTransaction: null, applyTransactionProps: {}, applyActions: [] });
 
                                            if (exit === PK.Enum.EXIT_SUCCESS) {
-                                               if (this.state.tracerAvailable) {
+                                               if (this.state.checkRestartAvailable) {
                                                    this.setState({ state: "loading", loadPercent: null });
-                                                   this.callTracer("updateSuccess");
+                                                   this.checkNeedsRestart()
+                                                           .finally(() => this.setState({ state: "updateSuccess" }));
                                                } else {
                                                    this.setState({ state: "updateSuccess", loadPercent: null });
                                                }
                                                this.loadHistory();
                                            } else if (exit === PK.Enum.EXIT_CANCELLED) {
-                                               if (this.state.tracerAvailable) {
+                                               if (this.state.checkRestartAvailable) {
                                                    this.setState({ state: "loading", loadPercent: null });
-                                                   this.callTracer(null);
+                                                   this.checkNeedsRestart();
                                                }
                                                this.loadUpdates();
                                            } else {
@@ -1354,7 +1427,9 @@ class OsUpdates extends React.Component {
     }
 
     renderContent() {
-        let applySecurity, applyKpatches, applyAll;
+        let applySecurity;
+        let applyKpatches;
+        let applyAll;
 
         /* On unregistered RHEL systems we need some heuristics: If the "main" OS repos (which provide coreutils) require
          * a subscription, then point this out and don't show available updates, even if there are some auxiliary
@@ -1450,7 +1525,7 @@ class OsUpdates extends React.Component {
 
             return (
                 <>
-                    <PageSection>
+                    <PageSection hasBodyWrapper={false}>
                         <Gallery className='ct-cards-grid' hasGutter>
                             <CardsPage handleRefresh={this.handleRefresh}
                                        applySecurity={applySecurity}
@@ -1463,10 +1538,10 @@ class OsUpdates extends React.Component {
                     </PageSection>
                     { this.state.showRestartServicesDialog &&
                         <RestartServices
-                            tracerPackages={this.state.tracerPackages}
+                            restartPackages={this.state.restartPackages}
                             close={() => this.setState({ showRestartServicesDialog: false })}
                             state={this.state.state}
-                            callTracer={(state) => this.callTracer(state)}
+                            checkNeedsRestart={this.checkNeedsRestart}
                             onValueChanged={delta => this.setState(delta)}
                             loadUpdates={this.loadUpdates} />
                     }
@@ -1488,14 +1563,12 @@ class OsUpdates extends React.Component {
                     <EmptyStatePanel title={ STATE_HEADINGS[this.state.state] }
                                     icon={ ExclamationCircleIcon }
                                     paragraph={
-                                        <TextContent>
-                                            <Text component={TextVariants.p}>
-                                                {_("Please resolve the issue and reload this page.")}
-                                            </Text>
-                                        </TextContent>
+                                        <Content component={ContentVariants.p}>
+                                            {_("Please resolve the issue and reload this page.")}
+                                        </Content>
                                     }
                     />
-                    <CodeBlock className='pf-v5-u-mx-auto error-log'>
+                    <CodeBlock className='pf-v6-u-mx-auto error-log'>
                         <CodeBlockCode>
                             {this.state.errorMessages
                                     .filter((m, index) => index == 0 || m != this.state.errorMessages[index - 1])
@@ -1522,18 +1595,18 @@ class OsUpdates extends React.Component {
             }
 
             let warningTitle;
-            if (!this.state.tracerAvailable) {
+            if (!this.state.checkRestartAvailable) {
                 warningTitle = _("Reboot recommended");
             } else {
-                if (this.state.tracerPackages.reboot.length > 0)
+                if (this.state.restartPackages.reboot.length > 0)
                     warningTitle = cockpit.ngettext("A package needs a system reboot for the updates to take effect:",
                                                     "Some packages need a system reboot for the updates to take effect:",
-                                                    this.state.tracerPackages.reboot.length);
-                else if (this.state.tracerPackages.daemons.length > 0)
+                                                    this.state.restartPackages.reboot.length);
+                else if (this.state.restartPackages.daemons.length > 0)
                     warningTitle = cockpit.ngettext("A service needs to be restarted for the updates to take effect:",
                                                     "Some services need to be restarted for the updates to take effect:",
-                                                    this.state.tracerPackages.daemons.length);
-                else if (this.state.tracerPackages.manual.length > 0)
+                                                    this.state.restartPackages.daemons.length);
+                else if (this.state.restartPackages.manual.length > 0)
                     warningTitle = _("Some software needs to be restarted manually");
             }
 
@@ -1549,19 +1622,19 @@ class OsUpdates extends React.Component {
                     <UpdateSuccess onIgnore={this.loadUpdates}
                         openServiceRestartDialog={() => this.setState({ showRestartServicesDialog: true })}
                         openRebootDialog={() => this.setState({ showRebootSystemDialog: true })}
-                        restart={this.state.tracerPackages.daemons}
-                        manual={this.state.tracerPackages.manual}
-                        reboot={this.state.tracerPackages.reboot}
-                        tracerAvailable={this.state.tracerAvailable}
+                        restart={this.state.restartPackages.daemons}
+                        manual={this.state.restartPackages.manual}
+                        reboot={this.state.restartPackages.reboot}
+                        checkRestartAvailable={this.state.checkRestartAvailable}
                         history={this.state.history} />
                     { this.state.showRebootSystemDialog &&
                         <ShutdownModal onClose={() => this.setState({ showRebootSystemDialog: false })} />
                     }
                     { this.state.showRestartServicesDialog &&
-                        <RestartServices tracerPackages={this.state.tracerPackages}
+                        <RestartServices restartPackages={this.state.restartPackages}
                             close={() => this.setState({ showRestartServicesDialog: false })}
                             state={this.state.state}
-                            callTracer={(state) => this.callTracer(state)}
+                            checkNeedsRestart={this.checkNeedsRestart}
                             onValueChanged={delta => this.setState(delta)}
                             loadUpdates={this.loadUpdates} />
                     }
@@ -1588,17 +1661,17 @@ class OsUpdates extends React.Component {
             });
 
             return (
-                <PageSection>
+                <PageSection hasBodyWrapper={false}>
                     <Gallery className='ct-cards-grid' hasGutter>
                         <CardsPage onValueChanged={this.onValueChanged} handleRefresh={this.handleRefresh} {...this.state} />
                     </Gallery>
                     { this.state.showRestartServicesDialog &&
-                    <RestartServices tracerPackages={this.state.tracerPackages}
-                                close={() => this.setState({ showRestartServicesDialog: false })}
-                                state={this.state.state}
-                                callTracer={(state) => this.callTracer(state)}
-                                onValueChanged={delta => this.setState(delta)}
-                                loadUpdates={this.loadUpdates} />
+                    <RestartServices restartPackages={this.state.restartPackages}
+                                     close={() => this.setState({ showRestartServicesDialog: false })}
+                                     state={this.state.state}
+                                     checkNeedsRestart={this.checkNeedsRestart}
+                                     onValueChanged={delta => this.setState(delta)}
+                                     loadUpdates={this.loadUpdates} />
                     }
                     { this.state.showRebootSystemDialog &&
                     <ShutdownModal onClose={() => this.setState({ showRebootSystemDialog: false })} />
@@ -1629,11 +1702,11 @@ class OsUpdates extends React.Component {
     render() {
         let content = this.renderContent();
         if (!["available", "uptodate"].includes(this.state.state))
-            content = <PageSection variant={PageSectionVariants.light}>{content}</PageSection>;
+            content = <PageSection hasBodyWrapper={false}>{content}</PageSection>;
 
         return (
             <WithDialogs>
-                <Page>
+                <Page className='no-masthead-sidebar'>
                     {content}
                 </Page>
             </WithDialogs>

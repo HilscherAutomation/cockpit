@@ -136,7 +136,8 @@ export function proxy(name, kind) {
 
     cockpit.event_target(self);
 
-    let unit, details;
+    let unit;
+    let details;
     let wait_promise_resolve;
     const wait_promise = new Promise(resolve => { wait_promise_resolve = resolve });
 
@@ -290,9 +291,9 @@ export function proxy(name, kind) {
 
             call_manager(dbus, method, args)
                     .then(([path]) => { pending_job_path = path })
-                    .catch(() => {
+                    .catch(ex => {
                         dbus.close();
-                        reject();
+                        reject(ex);
                     });
         });
     }

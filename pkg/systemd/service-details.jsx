@@ -28,7 +28,9 @@ import { ExpandableSection } from "@patternfly/react-core/dist/esm/components/Ex
 import { Tooltip, TooltipPosition } from "@patternfly/react-core/dist/esm/components/Tooltip/index.js";
 import { Card, CardHeader, CardBody, CardTitle } from "@patternfly/react-core/dist/esm/components/Card/index.js";
 import { List, ListItem } from "@patternfly/react-core/dist/esm/components/List/index.js";
-import { Modal } from "@patternfly/react-core/dist/esm/components/Modal/index.js";
+import {
+    Modal, ModalBody, ModalFooter, ModalHeader
+} from '@patternfly/react-core/dist/esm/components/Modal/index.js';
 import { Spinner } from "@patternfly/react-core/dist/esm/components/Spinner/index.js";
 import { Stack } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
 import { Switch } from "@patternfly/react-core/dist/esm/components/Switch/index.js";
@@ -49,6 +51,7 @@ import { ModalError } from 'cockpit-components-inline-notification.jsx';
 
 import './service-details.scss';
 import { KebabDropdown } from "cockpit-components-dropdown";
+import { Icon } from "@patternfly/react-core";
 
 const _ = cockpit.gettext;
 const METRICS_POLL_DELAY = 30000; // 30s
@@ -73,21 +76,21 @@ const ServiceConfirmDialog = ({ id, title, message, confirmText, confirmAction }
     return (
         <Modal id={id} isOpen
                position="top" variant="medium"
-               onClose={Dialogs.close}
-               title={title}
-               footer={
-                   <>
-                       { confirmText && confirmAction &&
-                       <Button variant='danger' onClick={confirmAction}>
-                           {confirmText}
-                       </Button>
-                       }
-                       <Button variant='link' className='btn-cancel' onClick={Dialogs.close}>
-                           { _("Cancel") }
-                       </Button>
-                   </>
-               }>
-            {message}
+               onClose={Dialogs.close}>
+            <ModalHeader title={title} />
+            <ModalBody>
+                {message}
+            </ModalBody>
+            <ModalFooter>
+                { confirmText && confirmAction &&
+                <Button variant='danger' onClick={confirmAction}>
+                    {confirmText}
+                </Button>
+                }
+                <Button variant='link' className='btn-cancel' onClick={Dialogs.close}>
+                    { _("Cancel") }
+                </Button>
+            </ModalFooter>
         </Modal>
     );
 };
@@ -416,6 +419,7 @@ export class ServiceDetails extends React.Component {
         const showAction = this.props.permitted || this.props.owner == "user";
         const isCustom = this.props.unit.FragmentPath.startsWith("/etc/systemd/system") && !masked;
         const isTimer = (this.unitType === "timer");
+        const isQuadlet = this.props.unit.SourcePath?.includes("/containers/systemd/");
 
         let status = [];
 
@@ -454,7 +458,9 @@ export class ServiceDetails extends React.Component {
             if (active) {
                 status.push(
                     <div key="running" className="status-running">
-                        <OnRunningIcon className="status-icon" />
+                        <Icon status="success">
+                            <OnRunningIcon className="status-icon" />
+                        </Icon>
                         <span className="status">{ _("Running") }</span>
                         <span className="side-note font-xs">{ _("Active since ") + timeformat.dateTime(this.props.unit.ActiveEnterTimestamp / 1000) }</span>
                     </div>
@@ -462,7 +468,9 @@ export class ServiceDetails extends React.Component {
             } else {
                 status.push(
                     <div key="stopped" className="status-stopped">
-                        <OffIcon className="status-icon" />
+                        <Icon>
+                            <OffIcon className="status-icon" />
+                        </Icon>
                         <span className="status">{ _("Not running") }</span>
                     </div>
                 );
@@ -596,7 +604,7 @@ export class ServiceDetails extends React.Component {
             });
 
         return (
-            <Card id="service-details-unit" className="ct-card">
+            <Card isPlain id="service-details-unit" className="ct-card">
                 { this.state.showDeleteDialog &&
                 <DeleteModal
                     name={this.props.unit.Description}
@@ -662,6 +670,15 @@ export class ServiceDetails extends React.Component {
                                     {cockpit.format("$0 ($1)", this.props.unit.Listen[0][1], this.props.unit.Listen[0][0])}
                                 </DescriptionListDescription>
                             </DescriptionListGroup>}
+                            {isQuadlet && cockpit.manifests?.podman?.capabilities?.includes("service-filtering") && <DescriptionListGroup>
+                                <DescriptionListTerm>{ _("Container") }</DescriptionListTerm>
+                                <DescriptionListDescription id="container">
+                                    <Button variant="link" isInline onClick={
+                                        () => cockpit.jump(`/podman#/?service=${this.props.unit.Id}`)}>
+                                        {_("View Podman container")}
+                                    </Button>
+                                </DescriptionListDescription>
+                            </DescriptionListGroup>}
                             { notMetConditions.length > 0 &&
                                 <DescriptionListGroup>
                                     <DescriptionListTerm className="failed">{ _("Condition failed") }</DescriptionListTerm>
@@ -697,24 +714,26 @@ const DeleteModal = ({ reason, name, handleCancel, handleDelete }) => {
     const [dialogError, setDialogError] = useState(undefined);
     return (
         <Modal isOpen
-               showClose={false}
                position="top" variant="medium"
                onClose={handleCancel}
-               title={cockpit.format(_("Confirm deletion of $0"), name)}
-               titleIconVariant="warning"
-               footer={<>
-                   <Button id="delete-timer-modal-btn" variant="danger" isDisabled={inProgress} isLoading={inProgress}
-                           onClick={() => { setInProgress(true); handleDelete().catch(exc => { setDialogError(exc.message); setInProgress(false) }) }}
-                   >
-                       {_("Delete")}
-                   </Button>
-                   <Button variant="link" isDisabled={inProgress} onClick={handleCancel}>{_("Cancel")}</Button>
-               </>}
         >
-            <Stack hasGutter>
-                {dialogError && <ModalError dialogError={_("Timer deletion failed")} dialogErrorDetail={dialogError} />}
-                {reason}
-            </Stack>
+            <ModalHeader title={cockpit.format(_("Confirm deletion of $0"), name)}
+                titleIconVariant="warning"
+            />
+            <ModalBody>
+                <Stack hasGutter>
+                    {dialogError && <ModalError dialogError={_("Timer deletion failed")} dialogErrorDetail={dialogError} />}
+                    {reason}
+                </Stack>
+            </ModalBody>
+            <ModalFooter>
+                <Button id="delete-timer-modal-btn" variant="danger" isDisabled={inProgress} isLoading={inProgress}
+                        onClick={() => { setInProgress(true); handleDelete().catch(exc => { setDialogError(exc.message); setInProgress(false) }) }}
+                >
+                    {_("Delete")}
+                </Button>
+                <Button variant="link" isDisabled={inProgress} onClick={handleCancel}>{_("Cancel")}</Button>
+            </ModalFooter>
         </Modal>
     );
 };

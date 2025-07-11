@@ -119,7 +119,7 @@ remove the symlink with the following command and log back into Cockpit:
 
     rm ~/.local/share/cockpit
 
-## Working on the non-web parts of Cockpit
+## Building and unit tests
 
 Cockpit uses autotools, so there are familiar `./configure` script and
 Makefile targets.
@@ -180,14 +180,14 @@ down after the fact — without re-running tests — using something like:
 
 There are also static code and syntax checks which you should run often:
 
-    test/static-code
+    test/common/static-code
 
 It is highly recommended to set up a git pre-push hook, to avoid pushing PRs
 that will fail on trivial errors:
 
     ln -s ../../tools/git-hook-pre-push .git/hooks/pre-push
 
-This calls `test/static-code` for each commit you're trying to push.
+This calls `test/common/static-code` for each commit you're trying to push.
 
 You can also set up a post-commit hook to do the same, after each commit:
 
@@ -203,45 +203,47 @@ git submodules:
 Refer to the [testing README](test/README.md) for details on running the Cockpit
 integration tests locally.
 
-## Python bridge
+## Bridge
 
-Most distro releases now ship a replacement for the C bridge written in Python.
-It resides in `src/cockpit` with most of its rules in `src/Makefile.am`.  This
-directory was chosen because it matches the standard so-called "src layout"
-convention for Python packages, where each package (`cockpit`) is a
+The Cockpit bridge is the initial program launched in a Cockpit Linux session:
+Its stdin/out is connected to the web socket (and thus to JavaScript in the
+[pages](pkg/)), where it speaks a [JSON protocol](doc/protocol.md) that
+multiplexes "channels" -- abstractions of operating system APIs that the pages
+use to implement their functionality. This protocol is translated into
+operating system calls such as opening or writing files, D-Bus calls, or HTTP
+queries. Think of the bridge as the moral equivalent of "bash" in a human SSH
+session.
+
+The bridge resides in `src/cockpit` with most of its rules in `src/Makefile.am`.
+This directory was chosen because it matches the standard so-called "src
+layout" convention for Python packages, where each package (`cockpit`) is a
 subdirectory of the `src` directory.
 
 ### Running the bridge
 
-The Python bridge can be used interactively on a local machine:
+The bridge can be used interactively on a local machine out of the source tree:
 
     PYTHONPATH=src python3 -m cockpit.bridge
 
 To make it easy to test out channels without having to write out messages
 manually, `cockpit.misc.print` can be used:
 
-    PYTHONPATH=src python3 -m cockpit.misc.print open fslist1 path=/etc watch=False | PYTHONPATH=src python3 -m cockpit.bridge
+    PYTHONPATH=src python3 -m cockpit.misc.print open fsinfo path=/etc 'attrs=["type", "entries"]' | PYTHONPATH=src python3 -m cockpit.bridge
 
 These shell aliases might be useful when experimenting with the protocol:
 
     alias cpy='PYTHONPATH=src python3 -m cockpit.bridge'
     alias cpf='PYTHONPATH=src python3 -m cockpit.misc.print'
 
-When working with the Python bridge on test images, note that `rhel-8*` still
-uses the C bridge. So if you want to explicitly have the Python bridge on those
-images use:
-
-    ./test/image-prepare --python
-
 To enable debug logging in journal on a test image, you can pass `--debug` to
 `image-prepare`. This will set `COCKPIT_DEBUG=all` to `/etc/environment`, if
 you are only interested channel debug messages change `all` to
 `cockpit.channel`.
 
-### Testing the Python bridge
+### Testing the bridge
 
-There are a growing number of Python `unittest` tests being written to test
-parts of the new bridge code.  You can run these with `make pytest` or
+There are a growing number of [pytest](https://docs.pytest.org) tests being written to test
+the bridge code.  You can run these with `make pytest` or
 `make pytest-cov`.  Those are both just rules to make sure that the
 `systemd_ctypes` submodule is checked out before running `pytest` from the
 source directory.
@@ -253,7 +255,7 @@ The tests require at least `pytest` 7.0.0 or higher to run.
 Cockpit uses [ESLint](https://eslint.org/) to automatically check JavaScript
 code style in `.js` and `.jsx` files.
 
-The linter is executed as part of `test/static-code`.
+The linter is executed as part of `test/common/static-code`.
 
 For developer convenience, the ESLint can be started explicitly by:
 
@@ -275,13 +277,13 @@ unused identifiers, and other JavaScript-related issues.
 Cockpit uses [Stylelint](https://stylelint.io/) to automatically check CSS code
 style in `.css` and `.scss` files.
 
-The linter is executed as part of `test/static-code`.
+The linter is executed as part of `test/common/static-code`.
 
 For developer convenience, the Stylelint can be started explicitly by:
 
     npm run stylelint
 
-But note that this only covers files in `pkg/`. `test/static-code` covers
+But note that this only covers files in `pkg/`. `test/common/static-code` covers
 *all* (S)CSS files tracked in git.
 
 Some rule violations can be automatically fixed by running:
@@ -294,23 +296,54 @@ During fast iterative development, you can also choose to not run stylelint, by
 running `./build.js` with the `-s`/`--no-stylelint` option. This speeds up the
 build and avoids build failures due to ill-formatted CSS or other issues.
 
+## Working on your local machine: systemd-sysext
+
+If you want to safely test your local changes directly on it, Cockpit supports
+installation as a [systemd-sysext](https://www.freedesktop.org/software/systemd/man/latest/systemd-sysext.html).
+This covers all parts of Cockpit (ws, tls, session, bridge, login page, systemd
+units, PAM configuration, and the session pages) except for the SELinux policy.
+It gets installed into `/run/extensions/`, so nothing ever hits the disk and
+this also works on read-only installations (CoreOS, OSTree, bootc).
+
+Just run:
+
+    tools/make-sysext
+
+This runs `./autogen.sh` if necessary, and then just re-`make`s your tree,
+re-installs it into `/run/extensions`, and reloads the sysext in systemd.
+Afterwards you can connect to http://localhost:9090 as usual.
+
+To remove this, reboot or run
+
+    tools/make-sysext stop
+
+**Attention**: This is not currently compatible with SELinux in enforcing mode.
+If you have that, you need to disable it:
+
+    sudo setenforce 0
+
 ## Working on your local machine: Web server
 
-To test changes to the login page or any other resources, you can bind-mount the
-build tree's `dist/static/` directory over the system one:
+If the above systemd-sysext approach does not work for you, you can also test
+changes with some bind mounts.
 
-    sudo mount -o bind dist/static/ /usr/share/cockpit/static/
+To test changes to the login page, you can bind-mount the build tree's
+`dist/` directory over the system one:
+
+    sudo mount -o bind dist /usr/share/cockpit
 
 Likewise, to test changes to the branding, use:
 
     sudo mount -o bind src/branding/ /usr/share/cockpit/branding/
+
+Do `mkdir dist/branding` if you run both of these commands at the same time.
 
 After that, run `systemctl stop cockpit.service` to ensure that the web server
 restarts on the next browser request.
 
 To make Cockpit use system-installed code again, umount the paths:
 
-    sudo umount /usr/share/cockpit/static/ /usr/share/cockpit/branding/
+    sudo umount /usr/share/cockpit /usr/share/cockpit/branding/
     systemctl stop cockpit.service
 
 Similarly, if you change `cockpit-ws` itself, you can make the system (systemd

@@ -25,6 +25,8 @@ import * as timeformat from "timeformat";
 const _ = cockpit.gettext;
 const C_ = cockpit.gettext;
 
+export const BTRFS_TOOL_MOUNT_PATH = "/run/cockpit/btrfs/";
+
 /* UTILITIES
  */
 
@@ -71,7 +73,8 @@ export function extract_option(split, opt) {
 }
 
 export function edit_crypto_config(block, modify) {
-    let old_config, new_config;
+    let old_config;
+    let new_config;
 
     function commit() {
         new_config[1]["track-parents"] = { t: 'b', v: true };
@@ -304,7 +307,9 @@ export function drive_name(drive) {
 }
 
 export function get_block_link_parts(client, path) {
-    let is_part, is_crypt, is_lvol;
+    let is_part;
+    let is_crypt;
+    let is_lvol;
 
     while (true) {
         if (client.blocks_part[path] && client.blocks_ptable[client.blocks_part[path].Table]) {
@@ -324,7 +329,8 @@ export function get_block_link_parts(client, path) {
     if (!block)
         return;
 
-    let location, link;
+    let location;
+    let link;
     if (client.mdraids[block.MDRaid]) {
         location = ["mdraid", client.mdraids[block.MDRaid].UUID];
         link = cockpit.format(_("MDRAID device $0"), mdraid_name(client.mdraids[block.MDRaid]));
@@ -382,7 +388,11 @@ export function get_partitions(client, block) {
         let n;
         let last_end = container_start;
         const total_end = container_start + container_size;
-        let block, start, size, is_container, is_contained;
+        let block;
+        let start;
+        let size;
+        let is_container;
+        let is_contained;
 
         const result = [];
 
@@ -452,90 +462,32 @@ export function get_partitions(client, block) {
     return process_level(0, 0, block.Size);
 }
 
-export function is_available_block(client, block, honor_ignore_hint) {
-    const block_ptable = client.blocks_ptable[block.path];
-    const block_part = client.blocks_part[block.path];
-    const block_pvol = client.blocks_pvol[block.path];
+let available_spaces = [];
 
-    function has_fs_label() {
-        if (!block.IdUsage)
-            return false;
-        // Devices with a LVM2_member label need to actually be
-        // associated with a volume group.
-        if (block.IdType == 'LVM2_member' && (!block_pvol || !client.vgroups[block_pvol.VolumeGroup]))
-            return false;
-        return true;
-    }
-
-    function is_mpath_member() {
-        if (!client.drives[block.Drive])
-            return false;
-        if (!client.drives_block[block.Drive]) {
-            // Broken multipath drive
-            return true;
-        }
-        const members = client.drives_multipath_blocks[block.Drive];
-        for (let i = 0; i < members.length; i++) {
-            if (members[i] == block)
-                return true;
-        }
-        return false;
-    }
-
-    function is_vdo_backing_dev() {
-        return !!client.legacy_vdo_overlay.find_by_backing_block(block);
-    }
-
-    function is_swap() {
-        return !!block && client.blocks_swap[block.path];
-    }
-
-    return (!(block.HintIgnore && honor_ignore_hint) &&
-            block.Size > 0 &&
-            !has_fs_label() &&
-            !is_mpath_member() &&
-            !is_vdo_backing_dev() &&
-            !is_swap() &&
-            !block_ptable &&
-            !(block_part && block_part.IsContainer) &&
-            !should_ignore(client, block.path));
+export function get_available_spaces() {
+    return available_spaces.sort((a, b) => block_cmp(a.block, b.block));
 }
 
-export function get_available_spaces(client) {
-    function make(path) {
-        const block = client.blocks[path];
-        const parts = get_block_link_parts(client, path);
-        const text = cockpit.format(parts.format, parts.link);
-        return { type: 'block', block, size: block.Size, desc: text };
-    }
+export function reset_available_spaces() {
+    available_spaces = [];
+}
 
-    const spaces = Object.keys(client.blocks).filter(p => is_available_block(client, client.blocks[p], true))
-            .sort(make_block_path_cmp(client))
-            .map(make);
+export function register_available_block_space(client, block) {
+    const parts = get_block_link_parts(client, block.path);
+    const text = cockpit.format(parts.format, parts.link);
+    available_spaces.push({ type: 'block', block, size: block.Size, desc: text });
+}
 
-    function add_free_spaces(block) {
-        const parts = get_partitions(client, block);
-        let i, p, link_parts, text;
-        for (i in parts) {
-            p = parts[i];
-            if (p.type == 'free') {
-                link_parts = get_block_link_parts(client, block.path);
-                text = cockpit.format(link_parts.format, link_parts.link);
-                spaces.push({
-                    type: 'free',
-                    block,
-                    start: p.start,
-                    size: p.size,
-                    desc: cockpit.format(_("unpartitioned space on $0"), text)
-                });
-            }
-        }
-    }
-
-    for (const p in client.blocks_ptable)
-        add_free_spaces(client.blocks[p]);
-
-    return spaces;
+export function register_available_free_space(client, block, partition) {
+    const link_parts = get_block_link_parts(client, block.path);
+    const text = cockpit.format(link_parts.format, link_parts.link);
+    available_spaces.push({
+        type: 'free',
+        block,
+        start: partition.start,
+        size: partition.size,
+        desc: cockpit.format(_("unpartitioned space on $0"), text)
+    });
 }
 
 export function prepare_available_spaces(client, spcs) {
@@ -664,13 +616,27 @@ export function is_netdev(client, path) {
 }
 
 export function should_ignore(client, path) {
+    const block = client.blocks[path];
+
+    // HACK - https://github.com/stratis-storage/stratisd/issues/3801
+    //
+    // Filter out Stratis private device mapper devices. This normally
+    // happens by setting the DM_UDEV_DISABLE_OTHER_RULES_FLAG in the
+    // udev database (which causes UDisks2 to ignore the block
+    // device), but since Stratis 3.8 the "*-crypt" devices don't have
+    // them.
+
+    if (block && decode_filename(block.PreferredDevice).startsWith("/dev/mapper/stratis-1-private"))
+        return true;
+
+    // Check what Anaconda tells us.
+
     if (!client.in_anaconda_mode())
         return false;
 
     const parents = get_direct_parent_blocks(client, path);
     if (parents.length == 0) {
-        const b = client.blocks[path];
-        return b && client.should_ignore_block(b);
+        return block && client.should_ignore_block(block);
     } else {
         return parents.some(p => should_ignore(client, p));
     }
@@ -798,7 +764,7 @@ export function get_fstab_config_with_client(client, block, also_child_config, s
             const opts = decode_filename(c[1].opts.v).split(",");
             if (opts.indexOf("subvolid=" + subvol.id) >= 0)
                 return true;
-            if (opts.indexOf("subvol=" + subvol.pathname) >= 0)
+            if (opts.indexOf("subvol=" + subvol.pathname) >= 0 || opts.indexOf("subvol=/" + subvol.pathname) >= 0)
                 return true;
 
             // btrfs mounted without subvol argument.
@@ -835,7 +801,7 @@ export function get_fstab_config_with_client(client, block, also_child_config, s
         return [];
 }
 
-export function get_active_usage(client, path, top_action, child_action, is_temporary, subvol) {
+export function get_active_usage(client, path, top_action, child_action, is_temporary, subvol, allow_multi_device_delete) {
     function get_usage(usage, path, level) {
         const block = client.blocks[path];
         const fsys = client.blocks_fsys[path];
@@ -864,6 +830,11 @@ export function get_active_usage(client, path, top_action, child_action, is_temp
             const [, mount_point] = get_fstab_config_with_client(client, block);
             const has_fstab_entry = is_temporary && location == mount_point;
 
+            // Ignore the secret btrfs mount point unless we are
+            // formatting (in which case subvol is false).
+            if (btrfs_volume && subvol && location.startsWith(BTRFS_TOOL_MOUNT_PATH))
+                return;
+
             for (const u of usage) {
                 if (u.usage == 'mounted' && u.location == location) {
                     if (is_top) {
@@ -881,7 +852,7 @@ export function get_active_usage(client, path, top_action, child_action, is_temp
                 has_fstab_entry,
                 set_noauto: !is_top && !is_temporary,
                 actions: (is_top ? get_actions(_("unmount")) : [_("unmount")]).concat(has_fstab_entry ? [_("mount")] : []),
-                blocking: client.strip_mount_point_prefix(location) === false,
+                blocking: client.strip_mount_point_prefix(location) === false && !location.startsWith(BTRFS_TOOL_MOUNT_PATH),
             });
         }
 
@@ -891,7 +862,7 @@ export function get_active_usage(client, path, top_action, child_action, is_temp
 
         // We allow a btrfs volume with one device to be formatted as this
         // looks the most like a normal filesystem use case.
-        if (btrfs_volume && btrfs_volume.data.num_devices !== 1 && !subvol) {
+        if (btrfs_volume && btrfs_volume.data.num_devices !== 1 && !subvol && !allow_multi_device_delete) {
             usage.push({
                 level,
                 usage: 'btrfs-device',
@@ -1143,8 +1114,30 @@ export function get_byte_units(guide_value) {
         { factor: 1000 ** 4, name: "TB" },
     ];
     // Find the biggest unit which gives two digits left of the decimal point (>= 10)
-    const unit = units.findLastIndex(unit => guide_value / unit.factor >= 10);
+    let unit;
+    for (unit = units.length - 1; unit >= 0; unit--)
+        if (guide_value / units[unit].factor >= 10)
+            break;
     // Mark it selected.  If we couldn't find one (-1), then use MB.
     units[Math.max(0, unit)].selected = true;
     return units;
+}
+
+/** @type (client: any, path: string) => boolean */
+export function contains_rootfs(client, path) {
+    const block = client.blocks[path];
+    const crypto = client.blocks_crypto[path];
+    let fsys_config = null;
+
+    if (block)
+        fsys_config = block.Configuration.find(c => c[0] == "fstab");
+    if (!fsys_config && crypto)
+        fsys_config = crypto.ChildConfiguration.find(c => c[0] == "fstab");
+
+    if (fsys_config) {
+        const dir = decode_filename(fsys_config[1].dir.v);
+        return dir == "/";
+    }
+
+    return get_children(client, path).some(p => contains_rootfs(client, p));
 }

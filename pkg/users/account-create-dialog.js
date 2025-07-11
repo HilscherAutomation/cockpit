@@ -115,7 +115,7 @@ function AccountCreateBody({ state, errors, change, shells }) {
                        isChecked={!locked} onChange={(_, checked) => change("locked", !checked)}
                        description={
                            <Checkbox id="accounts-create-force-password-change"
-                                     className="pf-v5-u-mb-xs"
+                                     className="pf-v6-u-mb-xs"
                                      label={_("Require password change on first login")}
                                      isChecked={change_passw_force} onChange={(_event, checked) => change("change_passw_force", checked)} />
                        } />
@@ -235,7 +235,7 @@ function suggest_username(realname) {
 
         for (let k = 0; k < str.length;) {
             if (!is_valid_char_name(str[k]))
-                str = str.substr(0, k) + str.substr(k + 1);
+                str = str.substring(0, k) + str.substring(k + 1);
             else
                 k++;
         }

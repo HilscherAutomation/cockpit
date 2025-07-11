@@ -19,22 +19,25 @@ import json
 import os.path
 import re
 import textwrap
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from typing import Any
 
-from testlib import Error, MachineCase, wait
+from machine.machine_core.machine_virtual import VirtMachine
+from testlib import Error, JsonObject, MachineCase, wait
 
 
-def from_udisks_ascii(codepoints):
+def from_udisks_ascii(codepoints: Sequence[int]) -> str:
     return ''.join(map(chr, codepoints[:-1]))
 
 
-class StorageHelpers:
+class StorageHelpers(MachineCase):
     """Mix-in class for using in tests that derive from something else than MachineCase or StorageCase"""
 
-    def inode(self, f):
+    def inode(self, f: str) -> str:
         return self.machine.execute("stat -L '%s' -c %%i" % f)
 
-    def retry(self, setup, check, teardown):
-        def step():
+    def retry(self, check: Callable[[], bool], setup: Callable[[], None] | None = None, teardown: Callable[[], None] | None = None) -> None:
+        def step() -> bool:
             if setup:
                 setup()
             if check():
@@ -45,23 +48,26 @@ class StorageHelpers:
 
         self.browser.wait(step)
 
-    def add_ram_disk(self, size=50):
+    def add_ram_disk(self, size: int = 50, delay: int | None = None) -> str:
         """Add per-test RAM disk
 
         The disk gets removed automatically when the test ends. This is safe for @nondestructive tests.
+
+        Optionally takes a delay in nanoseconds which delays IO responses, 100000000 equals ~ 40 kB/s.
 
         Return the device name.
         """
         # sanity test: should not yet be loaded
         self.machine.execute("test ! -e /sys/module/scsi_debug")
-        self.machine.execute(f"modprobe scsi_debug dev_size_mb={size}")
+        delay_option = f'ndelay={delay}' if delay else ''
+        self.machine.execute(f"modprobe scsi_debug dev_size_mb={size} {delay_option}")
         dev = self.machine.execute('while true; do O=$(ls /sys/bus/pseudo/drivers/scsi_debug/adapter*/host*/target*/*:*/block 2>/dev/null || true); '
                                    '[ -n "$O" ] && break || sleep 0.1; done; echo "/dev/$O"').strip()
         # don't use addCleanup() here, this is often busy and needs to be cleaned up late; done in MachineCase.nonDestructiveSetup()
 
         return dev
 
-    def add_loopback_disk(self, size=50, name=None):
+    def add_loopback_disk(self, size: int = 50, name: str | None = None) -> str:
         """Add per-test loopback disk
 
         The disk gets removed automatically when the test ends. This is safe for @nondestructive tests.
@@ -83,7 +89,7 @@ class StorageHelpers:
         backf = self.machine.execute("mktemp /var/tmp/loop.XXXX").strip()
         dev = self.machine.execute(f"truncate --size={size}MB {backf}; "
                                    f"losetup -P --show {name if name else '--find'} {backf}").strip()
-        # If this device had partions in its last incarnation on this
+        # If this device had partitions in its last incarnation on this
         # machine, they might come back for unknown reasons, in a
         # non-functional state. Running partprobe will get rid of
         # them.
@@ -94,7 +100,7 @@ class StorageHelpers:
 
         return dev
 
-    def add_targetd_loopback_disk(self, index, size=50):
+    def add_targetd_loopback_disk(self, index: str, size: int = 50) -> str:
         """Add per-test loopback device that can be forcefully removed.
         """
 
@@ -116,7 +122,7 @@ class StorageHelpers:
             raise Error("Device not found")
         return dev
 
-    def force_remove_disk(self, device):
+    def force_remove_disk(self, device: str) -> None:
         """Act like the given device gets physically removed.
 
         This circumvents all the normal EBUSY failures, and thus can be used for testing
@@ -126,29 +132,33 @@ class StorageHelpers:
         # the removal trips up PCP and our usage graphs
         self.allow_browser_errors("direct: instance name lookup failed.*")
 
-    def addCleanupVG(self, vgname):
+    def addCleanupVG(self, vgname: str) -> None:
         """Ensure the given VG is removed after the test"""
 
         self.addCleanup(self.machine.execute, f"if [ -d /dev/{vgname} ]; then vgremove --force {vgname}; fi")
 
+    def addCleanupMount(self, mount_point: str) -> None:
+        self.addCleanup(self.machine.execute,
+                        f"if mountpoint -q {mount_point}; then umount {mount_point}; fi")
+
     # Dialogs
 
-    def dialog_wait_open(self):
+    def dialog_wait_open(self) -> None:
         self.browser.wait_visible('#dialog')
 
-    def dialog_wait_alert(self, text1, text2=None):
-        def has_alert_title():
-            t = self.browser.text('#dialog .pf-v5-c-alert__title')
+    def dialog_wait_alert(self, text1: str, text2: str | None = None) -> None:
+        def has_alert_title() -> bool:
+            t = self.browser.text('#dialog .pf-v6-c-alert__title')
             return text1 in t or (text2 is not None and text2 in t)
         self.browser.wait(has_alert_title)
 
-    def dialog_wait_title(self, text):
-        self.browser.wait_in_text('#dialog .pf-v5-c-modal-box__title', text)
+    def dialog_wait_title(self, text: str) -> None:
+        self.browser.wait_in_text('#dialog .pf-v6-c-modal-box__title', text)
 
-    def dialog_field(self, field):
+    def dialog_field(self, field: str) -> str:
         return f'#dialog [data-field="{field}"]'
 
-    def dialog_val(self, field):
+    def dialog_val(self, field: str) -> Any:
         sel = self.dialog_field(field)
         ftype = self.browser.attr(sel, "data-field-type")
         if ftype == "text-input-checked":
@@ -161,14 +171,16 @@ class StorageHelpers:
         else:
             return self.browser.val(sel)
 
-    def dialog_set_val(self, field, val):
+    def dialog_set_val(self, field: str, val: str | bool | int | dict[str, bool]) -> None:
         sel = self.dialog_field(field)
         ftype = self.browser.attr(sel, "data-field-type")
         if ftype == "checkbox":
+            assert isinstance(val, bool)
             self.browser.set_checked(sel, val)
         elif ftype == "select-spaces":
-            for label in val:
-                self.browser.set_checked(f'{sel} :contains("{label}") input', val)
+            assert isinstance(val, dict)
+            for label, value in val.items():
+                self.browser.set_checked(f'{sel} :contains("{label}") input', value)
         elif ftype == "size-slider":
             self.browser.set_val(sel + " .size-unit select", "1000000")
             self.browser.set_input_text(sel + " .size-text input", str(val))
@@ -178,32 +190,34 @@ class StorageHelpers:
         elif ftype == "select-radio":
             self.browser.click(sel + f" input[data-data='{val}']")
         elif ftype == "text-input":
+            assert isinstance(val, str)
             self.browser.set_input_text(sel, val)
         elif ftype == "text-input-checked":
             if not val:
                 self.browser.set_checked(sel + " input[type=checkbox]", val=False)
             else:
+                assert isinstance(val, str)
                 self.browser.set_checked(sel + " input[type=checkbox]", val=True)
                 self.browser.set_input_text(sel + " [type=text]", val)
         elif ftype == "combobox":
-            self.browser.click(sel + " button.pf-v5-c-select__toggle-button")
-            self.browser.click(sel + f" .pf-v5-c-select__menu li:contains('{val}') button")
+            self.browser.click(sel + " button.pf-v6-c-menu-toggle__button")
+            self.browser.click(f".pf-v6-c-menu li:contains('{val}') button")
         else:
             self.browser.set_val(sel, val)
 
-    def dialog_combobox_choices(self, field):
-        return self.browser.call_js_func("""(function (sel) {
-                                               var lis = ph_find(sel).querySelectorAll('li');
+    def dialog_combobox_choices(self, field: str) -> Any:
+        return self.browser.call_js_func("""(function () {
+                                               var lis = ph_find('.pf-v6-c-menu').querySelectorAll('li');
                                                var result = [];
                                                for (i = 0; i < lis.length; ++i)
                                                  result.push(lis[i].textContent);
                                                return result;
-                                             })""", self.dialog_field(field))
+                                             })""")
 
-    def dialog_is_present(self, field, label):
+    def dialog_is_present(self, field: str, label: str) -> bool:
         return self.browser.is_present(f'{self.dialog_field(field)} :contains("{label}") input')
 
-    def dialog_wait_val(self, field, val, unit=None):
+    def dialog_wait_val(self, field: str, val: str | bool, unit: str | None = None) -> None:
         if unit is None:
             unit = "1000000"
 
@@ -219,40 +233,40 @@ class StorageHelpers:
         else:
             self.browser.wait_val(sel, val)
 
-    def dialog_wait_error(self, field, val):
+    def dialog_wait_error(self, field: str, val: str) -> None:
         # XXX - allow for more than one error
-        self.browser.wait_in_text('#dialog .pf-v5-c-form__helper-text .pf-m-error', val)
+        self.browser.wait_in_text('#dialog .pf-v6-c-form__helper-text .pf-m-error', val)
 
-    def dialog_wait_not_present(self, field):
+    def dialog_wait_not_present(self, field: str) -> None:
         self.browser.wait_not_present(self.dialog_field(field))
 
-    def dialog_wait_apply_enabled(self):
+    def dialog_wait_apply_enabled(self) -> None:
         self.browser.wait_attr('#dialog button.apply:nth-of-type(1)', "disabled", None)
 
-    def dialog_wait_apply_disabled(self):
+    def dialog_wait_apply_disabled(self) -> None:
         self.browser.wait_visible('#dialog button.apply:nth-of-type(1)[disabled]')
 
-    def dialog_apply(self):
+    def dialog_apply(self) -> None:
         self.browser.click('#dialog button.apply:nth-of-type(1)')
 
-    def dialog_apply_secondary(self):
+    def dialog_apply_secondary(self) -> None:
         self.browser.click('#dialog button.apply:nth-of-type(2)')
 
-    def dialog_cancel(self):
+    def dialog_cancel(self) -> None:
         self.browser.click('#dialog button.cancel')
 
-    def dialog_wait_close(self):
+    def dialog_wait_close(self) -> None:
         # file system operations often take longer than 10s
         with self.browser.wait_timeout(max(self.browser.timeout, 60)):
             self.browser.wait_not_present('#dialog')
 
-    def dialog_check(self, expect):
+    def dialog_check(self, expect: Mapping[str, Any]) -> bool:
         for f in expect:
             if not self.dialog_val(f) == expect[f]:
                 return False
         return True
 
-    def dialog_set_vals(self, values):
+    def dialog_set_vals(self, values: JsonObject) -> None:
         # Sometimes a certain field needs to be set before other
         # fields come into existence and thus the order matters that
         # we set the fields in.  The tests however just give us a
@@ -261,7 +275,7 @@ class StorageHelpers:
         # can and then starting over.  As long as we make progress in
         # each iteration, everything is good.
         failed = {}
-        last_error = Exception
+        last_error = None
         for f in values:
             try:
                 self.dialog_set_val(f, values[f])
@@ -271,10 +285,10 @@ class StorageHelpers:
         if failed:
             if len(failed) < len(values):
                 self.dialog_set_vals(failed)
-            else:
+            elif last_error is not None:
                 raise last_error
 
-    def dialog(self, values, expect=None, secondary=False):
+    def dialog(self, values: JsonObject, expect: JsonObject | None = None, secondary: bool = False) -> None:
         if expect is None:
             expect = {}
         self.dialog_wait_open()
@@ -287,7 +301,7 @@ class StorageHelpers:
             self.dialog_apply()
         self.dialog_wait_close()
 
-    def confirm(self):
+    def confirm(self) -> None:
         self.dialog({})
 
     # There is some asynchronous activity in the storage stack.  (It
@@ -298,24 +312,24 @@ class StorageHelpers:
     # it has the right contents, or applying it a couple of times
     # until it works.
 
-    def dialog_open_with_retry(self, trigger, expect):
-        def setup():
+    def dialog_open_with_retry(self, trigger: Callable[[], None], expect: Mapping[str, Any] | Callable[[], bool]) -> None:
+        def setup() -> None:
             trigger()
             self.dialog_wait_open()
 
-        def check():
+        def check() -> bool:
             if callable(expect):
                 return expect()
             else:
                 return self.dialog_check(expect)
 
-        def teardown():
+        def teardown() -> None:
             self.dialog_cancel()
             self.dialog_wait_close()
-        self.retry(setup, check, teardown)
+        self.retry(check, setup, teardown)
 
-    def dialog_apply_with_retry(self, expected_errors=None):
-        def step():
+    def dialog_apply_with_retry(self, expected_errors: Collection[str] | None = None) -> None:
+        def step() -> bool:
             try:
                 self.dialog_apply()
                 self.dialog_wait_close()
@@ -331,7 +345,7 @@ class StorageHelpers:
             return True
         self.browser.wait(step)
 
-    def dialog_with_retry(self, trigger, values, expect):
+    def dialog_with_retry(self, trigger: Callable[[], None], values: Mapping[str, Any], expect: Callable[[], bool] | Mapping[str, Any]) -> None:
         self.dialog_open_with_retry(trigger, expect)
         if values:
             for f in values:
@@ -341,8 +355,10 @@ class StorageHelpers:
             self.dialog_cancel()
         self.dialog_wait_close()
 
-    def dialog_with_error_retry(self, trigger, errors, values=None, first_setup=None, retry_setup=None, setup=None):
-        def doit():
+    def dialog_with_error_retry(self, trigger: Callable[[], None], errors: Iterable[str], values: JsonObject | None = None,
+                                first_setup: Callable[[], None] | None = None, retry_setup: Callable[[], None] | None = None,
+                                setup: Callable[[], None] | None = None) -> None:
+        def doit() -> bool:
             nonlocal first_setup
             trigger()
             self.dialog_wait_open()
@@ -360,7 +376,7 @@ class StorageHelpers:
                 self.dialog_wait_close()
                 return True
             except Exception:
-                dialog_text = self.browser.text('#dialog .pf-v5-c-alert__title')
+                dialog_text = self.browser.text('#dialog .pf-v6-c-alert__title')
                 for err in errors:
                     if err in dialog_text:
                         print("WARNING: retrying dialog")
@@ -370,7 +386,7 @@ class StorageHelpers:
                 raise
         self.browser.wait(doit)
 
-    def udisks_objects(self):
+    def udisks_objects(self) -> Any:
         return json.loads(self.machine.execute(["python3", "-c", textwrap.dedent("""
             import dbus, json
             print(json.dumps(dbus.SystemBus().call_blocking(
@@ -379,7 +395,7 @@ class StorageHelpers:
                 "org.freedesktop.DBus.ObjectManager",
                 "GetManagedObjects", "", [])))""")]))
 
-    def configuration_field(self, dev, tab, field):
+    def configuration_field(self, dev: str, tab: str, field: str) -> str:
         managerObjects = self.udisks_objects()
         for path in managerObjects:
             if "org.freedesktop.UDisks2.Block" in managerObjects[path]:
@@ -392,13 +408,13 @@ class StorageHelpers:
                                 return from_udisks_ascii(entry[1][field])
         return ""
 
-    def assert_in_configuration(self, dev, tab, field, text):
+    def assert_in_configuration(self, dev: str, tab: str, field: str, text: str) -> None:
         self.assertIn(text, self.configuration_field(dev, tab, field))
 
-    def assert_not_in_configuration(self, dev, tab, field, text):
+    def assert_not_in_configuration(self, dev: str, tab: str, field: str, text: str) -> None:
         self.assertNotIn(text, self.configuration_field(dev, tab, field))
 
-    def child_configuration_field(self, dev, tab, field):
+    def child_configuration_field(self, dev: str, tab: str, field: str) -> str:
         udisks_objects = self.udisks_objects()
         for path in udisks_objects:
             if "org.freedesktop.UDisks2.Encrypted" in udisks_objects[path]:
@@ -413,10 +429,10 @@ class StorageHelpers:
                                 return from_udisks_ascii(entry[1][field])
         return ""
 
-    def assert_in_child_configuration(self, dev, tab, field, text):
+    def assert_in_child_configuration(self, dev: str, tab: str, field: str, text: str) -> None:
         self.assertIn(text, self.child_configuration_field(dev, tab, field))
 
-    def lvol_child_configuration_field(self, lvol, tab, field):
+    def lvol_child_configuration_field(self, lvol: str, tab: str, field: str) -> str:
         udisk_objects = self.udisks_objects()
         for path in udisk_objects:
             if "org.freedesktop.UDisks2.LogicalVolume" in udisk_objects[path]:
@@ -430,10 +446,10 @@ class StorageHelpers:
                                 return from_udisks_ascii(entry[1][field])
         return ""
 
-    def assert_in_lvol_child_configuration(self, lvol, tab, field, text):
+    def assert_in_lvol_child_configuration(self, lvol: str, tab: str, field: str, text: str) -> None:
         self.assertIn(text, self.lvol_child_configuration_field(lvol, tab, field))
 
-    def setup_systemd_password_agent(self, password):
+    def setup_systemd_password_agent(self, password: str) -> None:
         # This sets up a systemd password agent that replies to all
         # queries with the given password.
 
@@ -472,7 +488,8 @@ MakeDirectory=yes
 """)
         self.machine.execute("ln -s ../test-password-agent.path /etc/systemd/system/sysinit.target.wants/")
 
-    def encrypt_root(self, passphrase):
+    def modify_rootfs(self, vgname: str = "root", lvname: str = "root",
+                      passphrase: str | None = None) -> None:
         m = self.machine
 
         # Set up a password agent in the old root and then arrange for
@@ -483,15 +500,16 @@ MakeDirectory=yes
         # copied to the new root, so it will stay in place also when
         # the initrd is regenerated again from within the new root.
 
-        self.setup_systemd_password_agent(passphrase)
-        install_items = [
-            '/etc/systemd/system/sysinit.target.wants/test-password-agent.path',
-            '/etc/systemd/system/test-password-agent.path',
-            '/etc/systemd/system/test-password-agent.service',
-            '/usr/local/bin/test-password-agent',
-        ]
-        m.write("/etc/dracut.conf.d/01-askpass.conf",
-                f'install_items+=" {" ".join(install_items)} "')
+        if passphrase:
+            self.setup_systemd_password_agent(passphrase)
+            install_items = [
+                '/etc/systemd/system/sysinit.target.wants/test-password-agent.path',
+                '/etc/systemd/system/test-password-agent.path',
+                '/etc/systemd/system/test-password-agent.service',
+                '/usr/local/bin/test-password-agent',
+            ]
+            m.write("/etc/dracut.conf.d/01-askpass.conf",
+                    f'install_items+=" {" ".join(install_items)} "')
 
         # The first step is to move /boot to a new unencrypted
         # partition on the new disk but keep it mounted at /boot.
@@ -499,7 +517,7 @@ MakeDirectory=yes
         # which will look at /boot and do the right thing.
         #
         # Then we copy (most of) the old root to the new disk, into a
-        # logical volume sitting on top of a LUKS container.
+        # logical volume, maybe sitting on top of a LUKS container.
         #
         # The kernel command line is changed to use the new root
         # filesystem, and grub is installed on the new disk. The boot
@@ -512,8 +530,10 @@ MakeDirectory=yes
         # password agent from above.
         #
         # Before the reboot, we destroy the original disk to make
-        # really sure that it wont be used anymore.
+        # really sure that it won't be used anymore.
 
+        # Assert this is a destructive test which always is a VirtMachine.
+        assert isinstance(m, VirtMachine)
         info = m.add_disk("6G", serial="NEWROOT", boot_disk=True)
         dev = "/dev/" + info["dev"]
         wait(lambda: m.execute(f"test -b {dev} && echo present").strip() == "present")
@@ -522,14 +542,19 @@ set -x
 parted -s {dev} mktable msdos
 parted -s {dev} mkpart primary ext4 1M 500M
 parted -s {dev} mkpart primary ext4 500M 100%
-echo {passphrase} | cryptsetup luksFormat --pbkdf-memory=300 {dev}2
-luks_uuid=$(blkid -p {dev}2 -s UUID -o value)
-echo {passphrase} | cryptsetup luksOpen --pbkdf-memory=300 {dev}2 luks-$luks_uuid
-vgcreate root /dev/mapper/luks-$luks_uuid
-lvcreate root -n root -l100%VG
-mkfs.ext4 /dev/root/root
+if [ "{passphrase}" != "None" ]; then
+  echo {passphrase} | cryptsetup luksFormat --pbkdf-memory=300 {dev}2
+  luks_uuid=$(blkid -p {dev}2 -s UUID -o value)
+  echo {passphrase} | cryptsetup luksOpen --pbkdf-memory=300 {dev}2 luks-$luks_uuid
+  vgcreate {vgname} /dev/mapper/luks-$luks_uuid
+  luks_karg=rd.luks.uuid=$luks_uuid
+else
+  vgcreate {vgname} {dev}2
+fi
+lvcreate {vgname} -n {lvname} -l100%VG
+mkfs.ext4 /dev/{vgname}/{lvname}
 mkdir /new-root
-mount /dev/root/root /new-root
+mount /dev/{vgname}/{lvname} /new-root
 mkfs.ext4 {dev}1
 # don't move the EFI partition
 if mountpoint /boot/efi; then umount /boot/efi; fi
@@ -549,11 +574,11 @@ umount /new-root/boot
 mount {dev}1 /boot
 echo "(hd0) {dev}" >/boot/grub2/device.map
 sed -i -e 's,/boot/,/,' /boot/loader/entries/*
-uuid=$(blkid -p /dev/root/root -s UUID -o value)
+uuid=$(blkid -p /dev/{vgname}/{lvname} -s UUID -o value)
 buuid=$(blkid -p {dev}1 -s UUID -o value)
 echo "UUID=$uuid / auto defaults 0 0" >/new-root/etc/fstab
 echo "UUID=$buuid /boot auto defaults 0 0" >>/new-root/etc/fstab
-dracut --regenerate-all --force
+if [ "{passphrase}" != "None" ]; then dracut --regenerate-all --force; fi
 grub2-install {dev}
 ( # HACK - grub2-mkconfig messes with /boot/loader/entries/ and /etc/kernel/cmdline
   mv /boot/loader/entries /boot/loader/entries.stowed
@@ -562,93 +587,94 @@ grub2-install {dev}
   mv /boot/loader/entries.stowed /boot/loader/entries
   ! test -f /etc/kernel/cmdline.stowed || mv /etc/kernel/cmdline.stowed /etc/kernel/cmdline
 )
-grubby --update-kernel=ALL --args="root=UUID=$uuid rootflags=defaults rd.luks.uuid=$luks_uuid rd.lvm.lv=root/root"
+grubby --update-kernel=ALL --args="root=UUID=$uuid rootflags=defaults $luks_karg rd.lvm.lv={vgname}/{lvname}"
 ! test -f /etc/kernel/cmdline || cp /etc/kernel/cmdline /new-root/etc/kernel/cmdline
 """, timeout=300)
         # destroy bootability of the current root partition, just to make sure
         m.execute("rm -rf /etc/*")
         m.reboot()
-        self.assertEqual(m.execute("findmnt -n -o SOURCE /").strip(), "/dev/mapper/root-root")
+        self.assertEqual(m.execute("findmnt -n -o SOURCE /").strip(), f"/dev/mapper/{vgname}-{lvname}")
 
     # Cards and tables
 
-    def card(self, title):
+    def card(self, title: str) -> str:
         return f"[data-test-card-title='{title}']"
 
-    def card_parent_link(self):
-        return ".pf-v5-c-breadcrumb__item:nth-last-child(2) > a"
+    def card_parent_link(self) -> str:
+        return ".pf-v6-c-breadcrumb__item:nth-last-child(2) > a"
 
-    def card_header(self, title):
-        return self.card(title) + " .pf-v5-c-card__header"
+    def card_header(self, title: str) -> str:
+        return self.card(title) + " .pf-v6-c-card__header"
 
-    def card_row(self, title, index=None, name=None, location=None):
+    def card_row(self, title: str, index: int | None = None, name: str | None = None, location: str | None = None, table_index: int = 1) -> str:
+        pfx = self.card(title) + f" table:nth-of-type({table_index})"
         if index is not None:
-            return self.card(title) + f" tbody tr:nth-child({index})"
+            return pfx + f" tbody tr:nth-child({index})"
         elif name is not None:
             name = name.replace("/dev/", "")
-            return self.card(title) + f" tbody [data-test-row-name='{name}']"
+            return pfx + f" tbody [data-test-row-name='{name}']"
         else:
-            return self.card(title) + f" tbody [data-test-row-location='{location}']"
+            return pfx + f" tbody [data-test-row-location='{location}']"
 
-    def click_card_row(self, title, index=None, name=None, location=None):
-        # We need to click on a <td> element since that's where the handlers are...
-        self.browser.click(self.card_row(title, index, name, location) + " td:nth-child(1)")
+    def click_card_row(self, title: str, index: int | None = None, name: str | None = None, location: str | None = None, table_index: int = 1) -> None:
+        self.browser.click_button("id-link", self.card_row(title, index, name, location, table_index))
 
-    def card_row_col(self, title, row_index=None, col_index=None, row_name=None, row_location=None):
-        return self.card_row(title, row_index, row_name, row_location) + f" td:nth-child({col_index})"
+    def card_row_col(self, title: str, row_index: int | None = None, col_index: int | None = None,
+                     row_name: str | None = None, row_location: str | None = None, table_index: int = 1) -> str:
+        return self.card_row(title, row_index, row_name, row_location, table_index) + f" td:nth-child({col_index})"
 
-    def card_desc(self, card_title, desc_title):
+    def card_desc(self, card_title: str, desc_title: str) -> str:
         return self.card(card_title) + f" [data-test-desc-title='{desc_title}'] [data-test-value=true]"
 
-    def card_desc_action(self, card_title, desc_title):
+    def card_desc_action(self, card_title: str, desc_title: str) -> str:
         return self.card(card_title) + f" [data-test-desc-title='{desc_title}'] [data-test-action=true] button"
 
-    def card_button(self, card_title, button_title):
+    def card_button(self, card_title: str, button_title: str) -> str:
         return self.card(card_title) + f" button:contains('{button_title}')"
 
-    def dropdown_toggle(self, parent):
-        return parent + " .pf-v5-c-menu-toggle"
+    def dropdown_toggle(self, parent: str) -> str:
+        return parent + " .pf-v6-c-menu-toggle"
 
-    def dropdown_action(self, parent, title):
-        return parent + f" .pf-v5-c-menu button:contains('{title}')"
+    def dropdown_action(self, title: str) -> str:
+        return f".pf-v6-c-menu button:contains('{title}')"
 
-    def dropdown_description(self, parent, title):
-        return parent + f" .pf-v5-c-menu button:contains('{title}') .pf-v5-c-menu__item-description"
+    def dropdown_description(self, title: str) -> str:
+        return f".pf-v6-c-menu button:contains('{title}') .pf-v6-c-menu__item-description"
 
-    def click_dropdown(self, parent, title):
+    def click_dropdown(self, parent: str, title: str) -> None:
         self.browser.click(self.dropdown_toggle(parent))
-        self.browser.click(self.dropdown_action(parent, title))
+        self.browser.click(self.dropdown_action(title))
 
-    def click_card_dropdown(self, card_title, button_title):
+    def click_card_dropdown(self, card_title: str, button_title: str) -> None:
         self.click_dropdown(self.card_header(card_title), button_title)
 
-    def click_devices_dropdown(self, title):
+    def click_devices_dropdown(self, title: str) -> None:
         self.click_card_dropdown("Storage", title)
 
-    def check_dropdown_action_disabled(self, parent, title, expected_text):
+    def check_dropdown_action_disabled(self, parent: str, title: str, expected_text: str) -> None:
         self.browser.click(self.dropdown_toggle(parent))
-        self.browser.wait_visible(self.dropdown_action(parent, title) + "[disabled]")
-        self.browser.wait_text(self.dropdown_description(parent, title), expected_text)
+        self.browser.wait_visible(self.dropdown_action(title) + "[disabled]")
+        self.browser.wait_text(self.dropdown_description(title), expected_text)
         self.browser.click(self.dropdown_toggle(parent))
 
-    def wait_mounted(self, card_title):
+    def wait_mounted(self, card_title: str) -> None:
         with self.browser.wait_timeout(30):
             self.browser.wait_not_in_text(self.card_desc(card_title, "Mount point"),
                                           "The filesystem is not mounted.")
 
-    def wait_not_mounted(self, card_title):
+    def wait_not_mounted(self, card_title: str) -> None:
         with self.browser.wait_timeout(30):
             self.browser.wait_in_text(self.card_desc(card_title, "Mount point"),
                                       "The filesystem is not mounted.")
 
-    def wait_card_button_disabled(self, card_title, button_title):
+    def wait_card_button_disabled(self, card_title: str, button_title: str) -> None:
         with self.browser.wait_timeout(30):
             self.browser.wait_visible(self.card_button(card_title, button_title) + ":disabled")
 
 
-class StorageCase(MachineCase, StorageHelpers):
+class StorageCase(StorageHelpers):
 
-    def setUp(self):
+    def setUp(self) -> None:
 
         if self.image == "fedora-coreos":
             self.skipTest("No udisks/cockpit-storaged on OSTree images")
@@ -656,7 +682,7 @@ class StorageCase(MachineCase, StorageHelpers):
         super().setUp()
 
         ver = self.machine.execute("busctl --system get-property org.freedesktop.UDisks2 /org/freedesktop/UDisks2/Manager org.freedesktop.UDisks2.Manager Version || true")
-        m = re.match('s "(.*)"', ver)
+        m = re.match(r's "(.*)"', ver)
         if m:
             self.storaged_version = list(map(int, m.group(1).split(".")))
         else:
@@ -679,3 +705,12 @@ class StorageCase(MachineCase, StorageHelpers):
         # gets it immediately.  But sometimes the interface is already
         # gone.
         self.allow_journal_messages("org.freedesktop.UDisks2: couldn't get property org.freedesktop.UDisks2.Filesystem Size .* No such interface.*")
+
+
+class StorageSmartCase(StorageCase):
+    provision = {
+        "0": {
+            "disk_bus": "sata",
+            "disk_dev": "sda",
+        }
+    }

@@ -31,7 +31,7 @@ const _ = cockpit.gettext;
 export function AccountLogs({ name }) {
     const [logins, setLogins] = useState([]);
     useInit(() => {
-        cockpit.spawn(["last", "--time-format", "iso", "-n", 25, name], { environ: ["LC_ALL=C"] })
+        cockpit.spawn(["last", "--time-format", "iso", "-n25", "--fullnames", name], { environ: ["LC_ALL=C"] })
                 .then(data => {
                     let logins = [];
                     data.split('\n').forEach(line => {
@@ -69,7 +69,7 @@ export function AccountLogs({ name }) {
     }, [name]);
 
     return (
-        <Card id="account-logs">
+        <Card isPlain id="account-logs">
             <CardTitle component="h2">{_("Login history")}</CardTitle>
             <CardBody className="contains-list">
                 <ListingTable variant="compact" aria-label={ _("Login history list") }

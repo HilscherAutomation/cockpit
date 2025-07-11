@@ -23,7 +23,6 @@ import * as timeformat from "timeformat";
 
 import React from 'react';
 import { EmptyStatePanel } from "cockpit-components-empty-state.jsx";
-import { AbrtLogDetails } from "./abrtLog.jsx";
 import { ExclamationCircleIcon } from '@patternfly/react-icons';
 import { Breadcrumb, BreadcrumbItem } from "@patternfly/react-core/dist/esm/components/Breadcrumb/index.js";
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
@@ -55,7 +54,7 @@ const LogDetails = ({ entry }) => {
 
     return (
         <GalleryItem>
-            <Card>
+            <Card isPlain>
                 <CardHeader actions={{ actions }}>
                     <h2 id="entry-heading">{id}</h2>
                 </CardHeader>
@@ -175,29 +174,21 @@ export class LogEntry extends React.Component {
             const entry = this.state.entry;
             const date = timeformat.dateTimeSeconds(entry.__REALTIME_TIMESTAMP / 1000);
 
-            if (this.state.problemPath) {
-                breadcrumb = cockpit.format(_("$0: crash at $1"), entry.PROBLEM_BINARY, date);
-                content = <AbrtLogDetails problem={this.state.problemPath}
-                                          entry={entry}
-                                          service={this.state.abrtService}
-                                          reloadProblems={this.goHome} />;
-            } else {
-                breadcrumb = cockpit.format(_("Entry at $0"), date);
-                content = <LogDetails entry={entry} />;
-            }
+            breadcrumb = cockpit.format(_("Entry at $0"), date);
+            content = <LogDetails entry={entry} />;
         }
 
         return (
-            <Page id="log-details" className="log-details">
-                <PageBreadcrumb stickyOnBreakpoint={{ default: "top" }}>
+            <Page id="log-details" className="log-details no-masthead-sidebar">
+                <PageBreadcrumb hasBodyWrapper={false} stickyOnBreakpoint={{ default: "top" }}>
                     <Breadcrumb>
-                        <BreadcrumbItem onClick={this.goHome} className="pf-v5-c-breadcrumb__link">{_("Logs")}</BreadcrumbItem>
+                        <BreadcrumbItem onClick={this.goHome} className="pf-v6-c-breadcrumb__link">{_("Logs")}</BreadcrumbItem>
                         <BreadcrumbItem isActive>
                             {breadcrumb}
                         </BreadcrumbItem>
                     </Breadcrumb>
                 </PageBreadcrumb>
-                <PageSection>
+                <PageSection hasBodyWrapper={false}>
                     <Gallery hasGutter>
                         {content}
                     </Gallery>

@@ -38,7 +38,6 @@ Makefile.in
 /cockpit-certificate-ensure
 /cockpit-pcp
 /cockpit-session
-/cockpit-ssh
 /cockpit-tls
 /cockpit-ws
 /cockpit-wsinstance-factory
@@ -60,6 +59,7 @@ Makefile.in
 /tags
 /test-*
 /test_rsa_key
+/Test[A-Z]*
 /tmp-dist
 /tmp/
 /tsconfig.tsbuildinfo
@@ -73,15 +73,15 @@ Makefile.in
 /doc/version
 /src/appstream/*.metainfo.xml
 /po/*.pot
-/src/bridge/org.cockpit-project.cockpit-bridge.policy
+/src/systemd/org.cockpit-project.cockpit-bridge.policy
 /src/cockpit.egg-info/
 /src/common/fail-html.c
 /src/systemd/cockpit*.service
-/src/systemd/cockpit*.socket
+/src/systemd/cockpit.socket
 /src/systemd/tmpfiles.d/cockpit-ws.conf
 /src/tls/cockpit-certificate-helper
 /src/ws/cockpit-desktop
-/src/ws/cockpit.appdata.xml
+/src/ws/org.cockpit_project.cockpit.appdata.xml
 /src/ws/mock-dbus-tests.[ch]
 /test/images/
 /tools/compile

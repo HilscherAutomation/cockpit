@@ -19,7 +19,9 @@
 
 import cockpit from "cockpit";
 
-import { get_init_superuser_for_options } from "./machines/machines";
+import {
+    get_init_superuser_for_options, split_connection_string, generate_connection_string
+} from "./machines/machines";
 import * as credentials from "credentials";
 import ssh_show_default_key_sh from "../lib/ssh-show-default-key.sh";
 import ssh_add_key_sh from "../lib/ssh-add-key.sh";
@@ -33,19 +35,139 @@ import { Checkbox } from "@patternfly/react-core/dist/esm/components/Checkbox/in
 import { ClipboardCopy } from "@patternfly/react-core/dist/esm/components/ClipboardCopy/index.js";
 import { ExpandableSection } from "@patternfly/react-core/dist/esm/components/ExpandableSection/index.js";
 import { Form, FormGroup } from "@patternfly/react-core/dist/esm/components/Form/index.js";
-import { Modal } from "@patternfly/react-core/dist/esm/components/Modal/index.js";
+import {
+    Modal, ModalBody, ModalFooter, ModalHeader
+} from '@patternfly/react-core/dist/esm/components/Modal/index.js';
 import { Popover } from "@patternfly/react-core/dist/esm/components/Popover/index.js";
 import { Radio } from "@patternfly/react-core/dist/esm/components/Radio/index.js";
 import { Stack } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
 import { TextInput } from "@patternfly/react-core/dist/esm/components/TextInput/index.js";
-import { OutlinedQuestionCircleIcon } from "@patternfly/react-icons";
+import { OutlinedQuestionCircleIcon, ExternalLinkAltIcon } from "@patternfly/react-icons";
+import { HelperText, HelperTextItem } from "@patternfly/react-core/dist/esm/components/HelperText/index.js";
+import { Content, ContentVariants } from "@patternfly/react-core/dist/esm/components/Content";
 
 import { FormHelper } from "cockpit-components-form-helper";
 import { ModalError } from "cockpit-components-inline-notification.jsx";
+import { fmt_to_fragments } from "utils.js";
 
 const _ = cockpit.gettext;
 
+export const HostModalState = () => {
+    function set_props(props, callback) {
+        self.modal_properties = props;
+        self.modal_callback = callback;
+        self.dispatchEvent("changed");
+    }
+
+    function close_modal() {
+        set_props(null, null);
+    }
+
+    function show_modal(properties) {
+        return new Promise((resolve, reject) => {
+            set_props(properties, result => { resolve(result); return Promise.resolve() });
+        });
+    }
+
+    const self = {
+        state: null,
+
+        show_modal,
+        close_modal,
+    };
+
+    return cockpit.event_target(self);
+};
+
+/* Activate and jump to a newly added machine, identified by its
+   connection string.
+ */
+function jump_to_new_connection_string(shell_state, connection_string) {
+    // Get the address of the machine from its connection string
+    const addr = split_connection_string(connection_string).address;
+    // Tell the Loader that now is the time to start monitoring the
+    // manifests.
+    shell_state.loader.connect(addr);
+    // Navigate to it.
+    shell_state.jump({ host: addr });
+}
+
+export async function add_host(state, shell_state) {
+    const connection_string = await state.show_modal({ });
+    if (connection_string)
+        jump_to_new_connection_string(shell_state, connection_string);
+}
+
+export async function edit_host(state, shell_state, machine) {
+    const { current_machine } = shell_state;
+    const connection_string = await state.show_modal({ address: machine.address });
+    if (connection_string) {
+        const addr = split_connection_string(connection_string).address;
+        if (machine == current_machine && addr != machine.address)
+            jump_to_new_connection_string(shell_state, connection_string);
+    }
+}
+
+export async function connect_host(state, shell_state, machine) {
+    // We need to trigger the loader for machines that already
+    // have state "connected". The state of a machine object
+    // survives a full shell reload, but the loader of course has
+    // no channel open for it yet. The bridge likely has the SSH
+    // connection still open, so the loader can do its job right
+    // away, like triggering the packages reload.
+    //
+    // "localhost" is a special case: we can always connect the
+    // loader without any extra credentials and we never want to
+    // show any dialogs for it.
+    //
+    if (machine.connection_string == "localhost" ||
+        machine.state == "connected" ||
+        machine.state == "connecting") {
+        shell_state.loader.connect(machine.address);
+        return machine.connection_string;
+    }
+
+    let connection_string = null;
+
+    if (machine.problem && codes[machine.problem]) {
+        // trouble shooting
+        connection_string = await state.show_modal({
+            address: machine.address,
+            template: codes[machine.problem],
+        });
+    } else if (!window.sessionStorage.getItem("connection-warning-shown")) {
+        // connect by launching into the "Connection warning" dialog.
+        connection_string = await state.show_modal({
+            address: machine.address,
+            template: "connect"
+        });
+    } else {
+        // Try to connect without any dialog
+        try {
+            await try2Connect(shell_state.machines, machine.connection_string);
+            connection_string = machine.connection_string;
+        } catch (err) {
+            // continue with troubleshooting in the dialog
+            connection_string = await state.show_modal({
+                address: machine.address,
+                template: codes[err.problem] || "change-port",
+                error_options: err,
+            });
+        }
+    }
+
+    if (connection_string) {
+        // make the rest of the shell aware that the machine is now connected
+        const parts = split_connection_string(connection_string);
+        shell_state.loader.connect(parts.address);
+        shell_state.update();
+    }
+
+    return connection_string;
+}
+
 export const codes = {
+    danger: "connect",
     "no-cockpit": "not-supported",
     "not-supported": "not-supported",
     "protocol-error": "not-supported",
@@ -85,17 +207,88 @@ class NotSupported extends React.Component {
             <Modal id="hosts_setup_server_dialog" isOpen
                    position="top" variant="medium"
                    onClose={this.props.onClose}
-                   title={_("Cockpit is not installed")}
-                   footer={
-                       <Button variant="link" className="btn-cancel" onClick={this.props.onClose}>
-                           { _("Close") }
-                       </Button>
-                   }
             >
-                <Stack hasGutter>
-                    { this.props.dialogError && <ModalError dialogError={this.props.dialogError} />}
-                    <p>{cockpit.format(_("A compatible version of Cockpit is not installed on $0."), this.props.full_address)}</p>
-                </Stack>
+                <ModalHeader title={_("Cockpit is not installed")} />
+                <ModalBody>
+                    <Stack hasGutter>
+                        { this.props.dialogError && <ModalError dialogError={this.props.dialogError} />}
+                        <p>{cockpit.format(_("A compatible version of Cockpit is not installed on $0."), this.props.full_address)}</p>
+                    </Stack>
+                </ModalBody>
+                <ModalFooter>
+                    <Button variant="secondary" className="btn-cancel" onClick={this.props.onClose}>
+                        { _("Close") }
+                    </Button>
+                </ModalFooter>
+            </Modal>
+        );
+    }
+}
+
+class Connect extends React.Component {
+    constructor(props) {
+        super(props);
+
+        this.state = {
+            inProgress: false,
+        };
+    }
+
+    onConnect() {
+        window.sessionStorage.setItem("connection-warning-shown", true);
+        this.setState({ inProgress: true });
+        this.props.run(try2Connect(this.props.machines_ins, this.props.full_address), ex => {
+            let keep_message = false;
+            if (ex.problem === "no-host") {
+                let host_id_port = this.props.full_address;
+                let port = "22";
+                const port_index = host_id_port.lastIndexOf(":");
+                if (port_index === -1) {
+                    host_id_port = this.props.full_address + ":22";
+                } else {
+                    port = host_id_port.substring(port_index + 1);
+                }
+
+                ex.message = cockpit.format(_("Unable to contact the given host $0. Make sure it has ssh running on port $1, or specify another port in the address."), host_id_port, port);
+                ex.problem = "not-found";
+                keep_message = true;
+            }
+            this.setState({ inProgress: false });
+            this.props.setError(ex, keep_message);
+        });
+    }
+
+    render() {
+        return (
+            <Modal id="hosts_connect_server_dialog" isOpen
+                   position="top" variant="small"
+                   onClose={this.props.onClose}
+            >
+                <ModalHeader title={fmt_to_fragments(_("Connect to $0?"), <b className="ct-heading-font-weight">{this.props.host}</b>)}
+                    titleIconVariant="warning"
+                />
+                <ModalBody>
+                    <Content component={ContentVariants.p}>
+                        {_("Connected hosts can fully control each other. This includes running programs that could harm your system or steal data. Only connect to trusted machines.")}
+                    </Content>
+                    <Content component={ContentVariants.p}>
+                        <a href="https://cockpit-project.org/guide/latest/multi-host.html" target="blank" rel="noopener noreferrer">
+                            <ExternalLinkAltIcon /> {_("Read more")}
+                        </a>
+                    </Content>
+                </ModalBody>
+                <ModalFooter>
+                    <HelperText>
+                        <HelperTextItem>{_("You will be reminded once per session.")}</HelperTextItem>
+                    </HelperText>
+                    <Button variant="warning" isLoading={this.state.inProgress}
+                                    onClick={() => this.onConnect()}>
+                        {_("Connect")}
+                    </Button>
+                    <Button variant="link" className="btn-cancel" onClick={this.props.onClose}>
+                        { _("Cancel") }
+                    </Button>
+                </ModalFooter>
             </Modal>
         );
     }
@@ -107,7 +300,7 @@ class AddMachine extends React.Component {
 
         let address_parts = null;
         if (this.props.full_address)
-            address_parts = this.props.machines_ins.split_connection_string(this.props.full_address);
+            address_parts = split_connection_string(this.props.full_address);
 
         let host_address = "";
         let host_user = "";
@@ -124,6 +317,8 @@ class AddMachine extends React.Component {
             old_machine = props.machines_ins.lookup(props.old_address);
         if (old_machine)
             color = this.rgb2Hex(old_machine.color);
+        if (old_machine && !old_machine.visible)
+            old_machine = null;
 
         this.state = {
             user: host_user || "",
@@ -175,9 +370,9 @@ class AddMachine extends React.Component {
     }
 
     onAddHost() {
-        const parts = this.props.machines_ins.split_connection_string(this.state.address);
+        const parts = split_connection_string(this.state.address);
         // user in "User name:" field wins over user in connection string
-        const address = this.props.machines_ins.generate_connection_string(this.state.user || parts.user, parts.port, parts.address);
+        const address = generate_connection_string(this.state.user || parts.user, parts.port, parts.address);
 
         if (this.onAddressChange())
             return;
@@ -199,9 +394,9 @@ class AddMachine extends React.Component {
         this.setState({ inProgress: true });
 
         this.props.setGoal(() => {
-            const parts = this.props.machines_ins.split_connection_string(this.state.address);
+            const parts = split_connection_string(this.state.address);
             // user in "User name:" field wins over user in connection string
-            const address = this.props.machines_ins.generate_connection_string(this.state.user || parts.user, parts.port, parts.address);
+            const address = generate_connection_string(this.state.user || parts.user, parts.port, parts.address);
 
             return new Promise((resolve, reject) => {
                 this.props.machines_ins.add(address, this.state.color)
@@ -222,22 +417,27 @@ class AddMachine extends React.Component {
             });
         });
 
-        this.props.run(this.props.try2Connect(address), ex => {
-            if (ex.problem === "no-host") {
-                let host_id_port = address;
-                let port = "22";
-                const port_index = host_id_port.lastIndexOf(":");
-                if (port_index === -1)
-                    host_id_port = address + ":22";
-                else
-                    port = host_id_port.substr(port_index + 1);
+        if (!window.sessionStorage.getItem("connection-warning-shown")) {
+            this.props.setError({ problem: "danger", command: "close" });
+        } else {
+            this.props.run(try2Connect(this.props.machines_ins, address), ex => {
+                if (ex.problem === "no-host") {
+                    let host_id_port = address;
+                    let port = "22";
+                    const port_index = host_id_port.lastIndexOf(":");
+                    if (port_index === -1) {
+                        host_id_port = address + ":22";
+                    } else {
+                        port = host_id_port.substring(port_index + 1);
+                    }
 
-                ex.message = cockpit.format(_("Unable to contact the given host $0. Make sure it has ssh running on port $1, or specify another port in the address."), host_id_port, port);
-                ex.problem = "not-found";
-            }
-            this.setState({ inProgress: false });
-            this.props.setError(ex);
-        });
+                    ex.message = cockpit.format(_("Unable to contact the given host $0. Make sure it has ssh running on port $1, or specify another port in the address."), host_id_port, port);
+                    ex.problem = "not-found";
+                }
+                this.setState({ inProgress: false });
+                this.props.setError(ex);
+            });
+        }
     }
 
     render() {
@@ -274,21 +474,23 @@ class AddMachine extends React.Component {
             <Modal id="hosts_setup_server_dialog" isOpen
                    position="top" variant="medium"
                    onClose={this.props.onClose}
-                   title={title}
-                   footer={<>
-                       <Button variant="primary" onClick={callback} isLoading={this.state.inProgress}
-                               isDisabled={this.state.address === "" || this.state.addressError !== "" || this.state.inProgress}>
-                           { submitText }
-                       </Button>
-                       <Button variant="link" className="btn-cancel" onClick={this.props.onClose}>
-                           { _("Cancel") }
-                       </Button>
-                   </>}
             >
-                <Stack hasGutter>
-                    { this.props.dialogError && <ModalError dialogError={this.props.dialogError} />}
-                    {body}
-                </Stack>
+                <ModalHeader title={title} />
+                <ModalBody>
+                    <Stack hasGutter>
+                        { this.props.dialogError && <ModalError dialogError={this.props.dialogError} />}
+                        {body}
+                    </Stack>
+                </ModalBody>
+                <ModalFooter>
+                    <Button variant="primary" onClick={callback} isLoading={this.state.inProgress}
+                            isDisabled={this.state.address === "" || this.state.addressError !== "" || this.state.inProgress}>
+                        { submitText }
+                    </Button>
+                    <Button variant="link" className="btn-cancel" onClick={this.props.onClose}>
+                        { _("Cancel") }
+                    </Button>
+                </ModalFooter>
             </Modal>
         );
     }
@@ -313,11 +515,9 @@ class MachinePort extends React.Component {
 
     onChangePort() {
         const promise = new Promise((resolve, reject) => {
-            const parts = this.props.machines_ins.split_connection_string(this.props.full_address);
+            const parts = split_connection_string(this.props.full_address);
             parts.port = this.state.port;
-            const address = this.props.machines_ins.generate_connection_string(parts.user,
-                                                                               parts.port,
-                                                                               parts.address);
+            const address = generate_connection_string(parts.user, parts.port, parts.address);
             const self = this;
 
             function update_host(ex) {
@@ -326,7 +526,7 @@ class MachinePort extends React.Component {
                         .then(() => {
                             // We failed before so try to connect again now that the machine is saved
                             if (ex) {
-                                self.props.try2Connect(address)
+                                try2Connect(self.props.machines_ins, address)
                                         .then(self.props.complete)
                                         .catch(reject);
                             } else {
@@ -336,7 +536,7 @@ class MachinePort extends React.Component {
                         .catch(ex => reject(cockpit.format(_("Failed to edit machine: $0"), cockpit.message(ex))));
             }
 
-            this.props.try2Connect(address)
+            try2Connect(this.props.machines_ins, address)
                     .then(update_host)
                     .catch(ex => {
                         // any other error means progress, so save
@@ -371,21 +571,23 @@ class MachinePort extends React.Component {
             <Modal id="hosts_setup_server_dialog" isOpen
                    position="top" variant="medium"
                    onClose={this.props.onClose}
-                   title={title}
-                   footer={<>
-                       <Button variant="primary" onClick={callback} isLoading={this.state.inProgress}
-                               isDisabled={this.state.inProgress}>
-                           { submitText }
-                       </Button>
-                       <Button variant="link" className="btn-cancel" onClick={this.props.onClose}>
-                           { _("Cancel") }
-                       </Button>
-                   </>}
             >
-                <Stack hasGutter>
-                    { this.props.dialogError && <ModalError dialogError={this.props.dialogError} />}
-                    {body}
-                </Stack>
+                <ModalHeader title={title} />
+                <ModalBody>
+                    <Stack hasGutter>
+                        { this.props.dialogError && <ModalError dialogError={this.props.dialogError} />}
+                        {body}
+                    </Stack>
+                </ModalBody>
+                <ModalFooter>
+                    <Button variant="primary" onClick={callback} isLoading={this.state.inProgress}
+                            isDisabled={this.state.inProgress}>
+                        { submitText }
+                    </Button>
+                    <Button variant="link" className="btn-cancel" onClick={this.props.onClose}>
+                        { _("Cancel") }
+                    </Button>
+                </ModalFooter>
             </Modal>
         );
     }
@@ -413,7 +615,7 @@ class HostKey extends React.Component {
                 match_problem = "unknown-hostkey";
             }
 
-            this.props.try2Connect(this.props.full_address, options)
+            try2Connect(this.props.machines_ins, this.props.full_address, options)
                     .then(this.props.complete)
                     .catch(ex => {
                         if (ex.problem !== match_problem) {
@@ -439,7 +641,7 @@ class HostKey extends React.Component {
         }
 
         this.props.run(q.then(() => {
-            return this.props.try2Connect(this.props.full_address, {})
+            return try2Connect(this.props.machines_ins, this.props.full_address, {})
                     .catch(ex => {
                         if ((ex.problem == "invalid-hostkey" || ex.problem == "unknown-hostkey") && machine && !machine.on_disk)
                             this.props.machines_ins.change(this.props.full_address, { host_key: null });
@@ -473,10 +675,10 @@ class HostKey extends React.Component {
             body = <>
                 <Alert variant='danger' isInline title={_("Changed keys are often the result of an operating system reinstallation. However, an unexpected change may indicate a third-party attempt to intercept your connection.")} />
                 <p>{_("To ensure that your connection is not intercepted by a malicious third-party, please verify the host key fingerprint:")}</p>
-                <ClipboardCopy isReadOnly hoverTip={_("Copy")} clickTip={_("Copied")} className="hostkey-fingerprint pf-v5-u-font-family-monospace">{fp}</ClipboardCopy>
+                <ClipboardCopy isReadOnly hoverTip={_("Copy")} clickTip={_("Copied")} className="hostkey-fingerprint pf-v6-u-font-family-monospace">{fp}</ClipboardCopy>
                 <p className="hostkey-type">({key_type})</p>
                 <p>{cockpit.format(_("To verify a fingerprint, run the following on $0 while physically sitting at the machine or through a trusted network:"), this.props.host)}</p>
-                <ClipboardCopy isReadOnly hoverTip={_("Copy")} clickTip={_("Copied")} className="hostkey-verify-help-cmds pf-v5-u-font-family-monospace">{scan_cmd}</ClipboardCopy>
+                <ClipboardCopy isReadOnly hoverTip={_("Copy")} clickTip={_("Copied")} className="hostkey-verify-help-cmds pf-v6-u-font-family-monospace">{scan_cmd}</ClipboardCopy>
                 <p>{_("The resulting fingerprint is fine to share via public methods, including email.")}</p>
                 <p>{_("If the fingerprint matches, click 'Trust and add host'. Otherwise, do not connect and contact your administrator.")}</p>
             </>;
@@ -491,9 +693,9 @@ class HostKey extends React.Component {
                                    isExpanded={this.state.verifyExpanded}
                                    onToggle={(_ev, verifyExpanded) => this.setState({ verifyExpanded }) }>
                     <div>{_("Run this command over a trusted network or physically on the remote machine:")}</div>
-                    <ClipboardCopy isReadOnly hoverTip={_("Copy")} clickTip={_("Copied")} className="hostkey-verify-help hostkey-verify-help-cmds pf-v5-u-font-family-monospace">{scan_cmd}</ClipboardCopy>
+                    <ClipboardCopy isReadOnly hoverTip={_("Copy")} clickTip={_("Copied")} className="hostkey-verify-help hostkey-verify-help-cmds pf-v6-u-font-family-monospace">{scan_cmd}</ClipboardCopy>
                     <div>{_("The fingerprint should match:")} {fingerprint_help}</div>
-                    <ClipboardCopy isReadOnly hoverTip={_("Copy")} clickTip={_("Copied")} className="hostkey-verify-help hostkey-fingerprint pf-v5-u-font-family-monospace">{fp}</ClipboardCopy>
+                    <ClipboardCopy isReadOnly hoverTip={_("Copy")} clickTip={_("Copied")} className="hostkey-verify-help hostkey-fingerprint pf-v6-u-font-family-monospace">{fp}</ClipboardCopy>
                 </ExpandableSection>
                 <Alert variant='warning' isInline isPlain title={_("Malicious pages on a remote machine may affect other connected hosts")} />
             </>;
@@ -503,23 +705,25 @@ class HostKey extends React.Component {
             <Modal id="hosts_setup_server_dialog" isOpen
                    position="top" variant="medium"
                    onClose={this.props.onClose}
-                   title={title}
-                   footer={<>
-                       { unknown ||
-                           <Button variant="primary" onClick={callback} isLoading={this.state.inProgress}
-                                   isDisabled={this.state.inProgress}>
-                               { submitText }
-                           </Button>
-                       }
-                       <Button variant="link" className="btn-cancel" onClick={this.props.onClose}>
-                           { _("Cancel") }
-                       </Button>
-                   </>}
             >
-                <Stack hasGutter>
-                    { this.props.dialogError && <ModalError dialogError={this.props.dialogError} />}
-                    {body}
-                </Stack>
+                <ModalHeader title={title} />
+                <ModalBody>
+                    <Stack hasGutter>
+                        { this.props.dialogError && <ModalError dialogError={this.props.dialogError} />}
+                        {body}
+                    </Stack>
+                </ModalBody>
+                <ModalFooter>
+                    { unknown ||
+                        <Button variant="primary" onClick={callback} isLoading={this.state.inProgress}
+                                isDisabled={this.state.inProgress}>
+                            { submitText }
+                        </Button>
+                    }
+                    <Button variant="link" className="btn-cancel" onClick={this.props.onClose}>
+                        { _("Cancel") }
+                    </Button>
+                </ModalFooter>
             </Modal>
         );
     }
@@ -588,7 +792,7 @@ class ChangeAuth extends React.Component {
                 .catch(ex => { this.setState({ inProgress: false }); this.props.setError(ex) });
 
         if (!this.props.error_options || this.props.error_options["auth-method-results"] === null) {
-            this.props.try2Connect(this.props.full_address)
+            try2Connect(this.props.machines_ins, this.props.full_address)
                     .then(this.props.complete)
                     .catch(ex => {
                         this.setState({ inProgress: false });
@@ -664,7 +868,7 @@ class ChangeAuth extends React.Component {
 
     login() {
         const options = {};
-        const user = this.props.machines_ins.split_connection_string(this.props.full_address).user || "";
+        const user = split_connection_string(this.props.full_address).user || "";
         const do_key_password_change = this.state.auto_login && this.state.default_ssh_key.unaligned_passphrase;
 
         let custom_password_error = "";
@@ -719,7 +923,7 @@ class ChangeAuth extends React.Component {
 
         this.props.run(this.maybe_unlock_key()
                 .then(() => {
-                    return this.props.try2Connect(this.props.full_address, options)
+                    return try2Connect(this.props.machines_ins, this.props.full_address, options)
                             .then(() => {
                                 if (machine)
                                     return this.props.machines_ins.change(machine.address, { user });
@@ -788,8 +992,8 @@ class ChangeAuth extends React.Component {
             const luser = this.state.user.name;
             const lhost = lmach ? lmach.label || lmach.address : "localhost";
             const afile = "~/.ssh/authorized_keys";
-            const ruser = this.props.machines_ins.split_connection_string(this.props.full_address).user || this.state.user.name;
-            const rhost = this.props.machines_ins.split_connection_string(this.props.full_address).address;
+            const ruser = split_connection_string(this.props.full_address).user || this.state.user.name;
+            const rhost = split_connection_string(this.props.full_address).address;
             if (!this.state.default_ssh_key.exists) {
                 auto_text = _("Create a new SSH key and authorize it");
                 auto_details = <>
@@ -882,27 +1086,54 @@ class ChangeAuth extends React.Component {
             <Modal id="hosts_setup_server_dialog" isOpen
                    position="top" variant="medium"
                    onClose={this.props.onClose}
-                   title={title}
-                   footer={<>
-                       <Button variant="primary" onClick={callback} isLoading={this.state.inProgress}
-                               isDisabled={this.state.inProgress || (!offer_login_password && !offer_key_password) || !this.state.default_ssh_key || !this.props.error_options}>
-                           { submitText }
-                       </Button>
-                       <Button variant="link" className="btn-cancel" onClick={this.props.onClose}>
-                           { _("Cancel") }
-                       </Button>
-                   </>}
             >
-                <Stack hasGutter>
-                    { this.props.dialogError && <ModalError dialogError={this.props.dialogError} />}
-                    {body}
-                </Stack>
+                <ModalHeader title={title} />
+                <ModalBody>
+                    <Stack hasGutter>
+                        { this.props.dialogError && <ModalError dialogError={this.props.dialogError} />}
+                        {body}
+                    </Stack>
+                </ModalBody>
+                <ModalFooter>
+                    <Button variant="primary" onClick={callback} isLoading={this.state.inProgress}
+                            isDisabled={this.state.inProgress || (!offer_login_password && !offer_key_password) || !this.state.default_ssh_key || !this.props.error_options}>
+                        { submitText }
+                    </Button>
+                    <Button variant="link" className="btn-cancel" onClick={this.props.onClose}>
+                        { _("Cancel") }
+                    </Button>
+                </ModalFooter>
             </Modal>
         );
     }
 }
 
-export class HostModal extends React.Component {
+function try2Connect(machines_ins, address, options) {
+    return new Promise((resolve, reject) => {
+        const conn_options = { ...options, payload: "echo", host: address };
+
+        conn_options["init-superuser"] = get_init_superuser_for_options(conn_options);
+
+        const machine = machines_ins.lookup(address);
+        if (machine && machine.host_key && !machine.on_disk) {
+            conn_options['temp-session'] = false; // Compatibility option
+            conn_options.session = 'shared';
+            conn_options['host-key'] = machine.host_key;
+        }
+
+        const client = cockpit.channel(conn_options);
+        client.send("x");
+        client.addEventListener("message", () => {
+            resolve();
+            client.close();
+        });
+        client.addEventListener("close", (event, options) => {
+            reject(options);
+        });
+    });
+}
+
+class HostModalInner extends React.Component {
     constructor(props) {
         super(props);
 
@@ -910,7 +1141,7 @@ export class HostModal extends React.Component {
             current_template: this.props.template || "add-machine",
             address: full_address(props.machines_ins, props.address),
             old_address: full_address(props.machines_ins, props.address),
-            error_options: null,
+            error_options: this.props.error_options,
             dialogError: "", // Error to be shown in the modal
         };
 
@@ -918,7 +1149,6 @@ export class HostModal extends React.Component {
 
         this.addressOrLabel = this.addressOrLabel.bind(this);
         this.changeContent = this.changeContent.bind(this);
-        this.try2Connect = this.try2Connect.bind(this);
         this.setGoal = this.setGoal.bind(this);
         this.setError = this.setError.bind(this);
         this.setAddress = this.setAddress.bind(this);
@@ -928,40 +1158,19 @@ export class HostModal extends React.Component {
 
     addressOrLabel() {
         const machine = this.props.machines_ins.lookup(this.state.address);
-        let host = this.props.machines_ins.split_connection_string(this.state.address).address;
+        let host = split_connection_string(this.state.address).address;
         if (machine && machine.label)
             host = machine.label;
         return host;
     }
 
-    changeContent(template, error_options) {
+    changeContent(template, error_options, with_error_message) {
         if (this.state.current_template !== template)
-            this.setState({ current_template: template, error_options });
-    }
-
-    try2Connect(address, options) {
-        return new Promise((resolve, reject) => {
-            const conn_options = { ...options, payload: "echo", host: address };
-
-            conn_options["init-superuser"] = get_init_superuser_for_options(conn_options);
-
-            const machine = this.props.machines_ins.lookup(address);
-            if (machine && machine.host_key && !machine.on_disk) {
-                conn_options['temp-session'] = false; // Compatibility option
-                conn_options.session = 'shared';
-                conn_options['host-key'] = machine.host_key;
-            }
-
-            const client = cockpit.channel(conn_options);
-            client.send("x");
-            client.addEventListener("message", () => {
-                resolve();
-                client.close();
+            this.setState({
+                current_template: template,
+                error_options,
+                dialogError: with_error_message ? cockpit.message(error_options) : null,
             });
-            client.addEventListener("close", (event, options) => {
-                reject(options);
-            });
-        });
     }
 
     complete() {
@@ -975,7 +1184,7 @@ export class HostModal extends React.Component {
         this.promise_callback = callback;
     }
 
-    setError(error) {
+    setError(error, keep_message_on_change) {
         if (error === null)
             return this.setState({ dialogError: null });
 
@@ -984,7 +1193,7 @@ export class HostModal extends React.Component {
             template = codes[error.problem];
 
         if (template && this.state.current_template !== template)
-            this.changeContent(template, error);
+            this.changeContent(template, error, keep_message_on_change);
         else
             this.setState({ error_options: error, dialogError: cockpit.message(error) });
     }
@@ -1037,11 +1246,15 @@ export class HostModal extends React.Component {
             host: this.addressOrLabel(),
             full_address: this.state.address,
             old_address: this.state.old_address,
-            address_data: this.props.machines_ins.split_connection_string(this.state.address),
+            address_data: split_connection_string(this.state.address),
             error_options: this.state.error_options,
             dialogError: this.state.dialogError,
             machines_ins: this.props.machines_ins,
-            onClose: this.props.onClose,
+            onClose: () => {
+                if (this.props.caller_cancelled)
+                    this.props.caller_cancelled();
+                this.props.onClose();
+            },
             run: this.run,
             setGoal: this.setGoal,
             setError: this.setError,
@@ -1050,7 +1263,9 @@ export class HostModal extends React.Component {
             complete: this.complete,
         };
 
-        if (template === "add-machine")
+        if (template === "connect")
+            return <Connect {...props} />;
+        else if (template === "add-machine")
             return <AddMachine {...props} />;
         else if (template === "unknown-hostkey" || template === "unknown-host" || template === "invalid-hostkey")
             return <HostKey {...props} />;
@@ -1066,10 +1281,21 @@ export class HostModal extends React.Component {
     }
 }
 
-HostModal.propTypes = {
+HostModalInner.propTypes = {
     machines_ins: PropTypes.object.isRequired,
     onClose: PropTypes.func.isRequired,
     caller_callback: PropTypes.func,
     address: PropTypes.string,
     template: PropTypes.string,
+};
+
+export const HostModal = ({ state, machines }) => {
+    if (!state.modal_properties)
+        return null;
+
+    return <HostModalInner machines_ins={machines}
+                           onClose={() => state.close_modal()}
+                           {...state.modal_properties}
+                           caller_callback={state.modal_callback}
+                           caller_cancelled={() => state.modal_callback(null)} />;
 };

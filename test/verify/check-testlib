@@ -55,8 +55,11 @@ class TestRunTestListing(unittest.TestCase):
         self.assertIn(b"TestNondestructiveExample.testOne\nTestNondestructiveExample.testTwo", ndtests.stdout)
 
         # nondestructive tests are sorted alphabetically
-        verify_ndtests = subprocess.run([run_tests, "--test-dir", VERIFY_DIR, "-n", "-l"], check=True, capture_output=True)
-        self.assertRegex(verify_ndtests.stdout, re.compile(b".*TestAccounts.*TestFirewall.*TestLogin.*TestServices.*TestTerminal.*", re.S))
+        verify_ndtests = subprocess.run([run_tests, "--test-dir", VERIFY_DIR, "-n", "-l"],
+                                        check=True, capture_output=True)
+        self.assertRegex(
+            verify_ndtests.stdout,
+            re.compile(rb".*TestAccounts.*TestFirewall.*TestLogin.*TestServices.*TestTerminal.*", re.S))
 
     def testNonDestructive(self):
         self.assertEqual(subprocess.check_output([run_tests, "--test-dir", EXAMPLE_DIR, "--nondestructive", "-l", "TestExample"]).strip().decode(),
@@ -159,7 +162,7 @@ class TestRunTest(testlib.MachineCase):
         self.assertNotRegex(stdout, b"testNoRetry # RETRY")
 
         # Check retry logic for changed source
-        shell = os.path.join("pkg", "shell", "hosts.jsx")
+        shell = os.path.join("pkg", "shell", "hosts.tsx")
         self.assertTrue(os.path.exists(shell))
 
         with open(shell, 'r') as f:
@@ -278,6 +281,7 @@ class TestTestlib(testlib.MachineCase):
         self.assertNotIn("cockpittest", self.machine.execute("cat /etc/passwd"))
         self.machine.execute("test ! -e /home/cockpittest")
 
+    @testlib.skipBeiboot("no cockpit-system package installed in beiboot mode")
     def testMiscAPI(self):
         assert self.system_before(1000)
         assert not self.system_before(100)

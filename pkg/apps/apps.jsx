@@ -17,7 +17,7 @@
  * along with Cockpit; If not, see <https://www.gnu.org/licenses/>.
  */
 
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
 import "polyfills";
 import 'cockpit-dark-theme'; // once per page
 
@@ -27,11 +27,12 @@ import React, { useState } from "react";
 import { createRoot } from 'react-dom/client';
 
 import { EmptyStatePanel } from "cockpit-components-empty-state.jsx";
+import { usePageLocation, useObject, useEvent } from "hooks";
+
 import { ApplicationList } from "./application-list.jsx";
 import { Application } from "./application.jsx";
 import { get_metainfo_db } from "./appstream.js";
-import { usePageLocation, useObject, useEvent } from "hooks";
-import { show_error } from "./utils.jsx";
+import { show_error } from "./utils";
 
 const App = () => {
     const [progress, setProgress] = useState({});
@@ -62,7 +63,6 @@ const App = () => {
         return <Application metainfo_db={metainfo_db}
                             action={action}
                             progress={progress[id]}
-                            progressTitle={progressTitle[id]}
                             id={id} />;
     } else { /* redirect */
         console.warn("not a apps location: " + path);

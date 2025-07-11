@@ -1,4 +1,4 @@
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
 import "../../node_modules/@patternfly/patternfly/components/Button/button.css";
 import 'cockpit-dark-theme'; // once per page
 import cockpit from "cockpit";
@@ -12,6 +12,7 @@ function id(sel) {
 
 function init() {
     const entries = cockpit.manifests.playground.playground;
+    cockpit.assert(typeof entries === "object", "Invalid playground manifest");
     const nav = id("nav");
 
     for (const p in entries) {

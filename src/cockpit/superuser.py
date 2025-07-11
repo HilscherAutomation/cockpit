@@ -98,10 +98,18 @@ class CockpitResponder(ferny.AskpassHandler):
 class AuthorizeResponder(CockpitResponder):
     def __init__(self, router: Router):
         self.router = router
+        self.authorize_attempted = False
 
-    async def do_askpass(self, messages: str, prompt: str, hint: str) -> str:
+    async def do_askpass(self, messages: str, prompt: str, hint: str) -> 'str | None':
+        if self.authorize_attempted:
+            logger.info("noninteractive authorize during init already attempted, rejecting")
+            return None
+        self.authorize_attempted = True
+
         hexuser = ''.join(f'{c:02x}' for c in getpass.getuser().encode('ascii'))
-        return await self.router.request_authorization(f'plain1:{hexuser}')
+        password = await self.router.request_authorization(f'plain1:{hexuser}')
+        # translate "no password" from authorize protocol (empty string) to ferny protocol (None)
+        return None if password == '' else password
 
 
 class SuperuserRoutingRule(RoutingRule, CockpitResponder, bus.Object, interface='cockpit.Superuser'):

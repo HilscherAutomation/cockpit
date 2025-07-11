@@ -1,4 +1,6 @@
 import cockpit from "cockpit";
+import { import_Manifests } from "../manifests";
+import { validate } from "import-json";
 
 import ssh_add_key_sh from "../../lib/ssh-add-key.sh";
 
@@ -68,6 +70,51 @@ export function get_init_superuser_for_options(options) {
     return value;
 }
 
+export function generate_connection_string(user, port, addr) {
+    let address = addr;
+    if (user)
+        address = user + "@" + address;
+
+    if (port)
+        address = address + ":" + port;
+
+    return address;
+}
+
+export function split_connection_string (conn_to) {
+    const parts = { address: "" };
+    let user_spot = -1;
+    let port_spot = -1;
+
+    if (conn_to) {
+        if (conn_to.substring(0, 6) === "ssh://")
+            conn_to = conn_to.substring(6);
+        user_spot = conn_to.lastIndexOf('@');
+        port_spot = conn_to.lastIndexOf(':');
+    }
+
+    if (user_spot > 0) {
+        parts.user = conn_to.substring(0, user_spot);
+        conn_to = conn_to.substring(user_spot + 1);
+        port_spot = conn_to.lastIndexOf(':');
+    }
+
+    if (port_spot > -1) {
+        const port = parseInt(conn_to.substring(port_spot + 1), 10);
+        if (!isNaN(port)) {
+            parts.port = port;
+            conn_to = conn_to.substring(0, port_spot);
+        }
+    }
+
+    parts.address = conn_to;
+    return parts;
+}
+
+function import_manifests(val) {
+    return validate("manifests", val, import_Manifests, {});
+}
+
 function Machines() {
     const self = this;
 
@@ -85,7 +132,7 @@ function Machines() {
         overlay: {
             localhost: {
                 visible: true,
-                manifests: cockpit.manifests
+                manifests: import_manifests(cockpit.manifests)
             }
         }
     };
@@ -157,9 +204,9 @@ function Machines() {
             if (!machine.address)
                 machine.address = host;
 
-            machine.connection_string = self.generate_connection_string(machine.user,
-                                                                        machine.port,
-                                                                        machine.address);
+            machine.connection_string = generate_connection_string(machine.user,
+                                                                   machine.port,
+                                                                   machine.address);
 
             if (!machine.label) {
                 if (host == "localhost" || host == "localhost.localdomain") {
@@ -203,7 +250,7 @@ function Machines() {
         const data = { ...machine, ...values };
         window.sessionStorage.setItem(skey, JSON.stringify(data));
         self.overlay(host, values);
-        return cockpit.when([]);
+        return Promise.resolve([]);
     }
 
     function update_saved_machine(host, values) {
@@ -219,7 +266,7 @@ function Machines() {
             }
         }
 
-        // FIXME: investigate re-using the proxy from Loader (runs in different frame/scope)
+        // FIXME: investigate reusing the proxy from Loader (runs in different frame/scope)
         const bridge = cockpit.dbus(null, { bus: "internal", superuser: "require" });
         const mod =
             bridge.call("/machines", "cockpit.Machines", "Update", ["99-webui.json", host, values_variant])
@@ -245,7 +292,7 @@ function Machines() {
     };
 
     self.add = function add(connection_string, color) {
-        let values = self.split_connection_string(connection_string);
+        let values = split_connection_string(connection_string);
         const host = values.address;
 
         values = {
@@ -323,7 +370,7 @@ function Machines() {
     };
 
     self.overlay = function overlay(host, values) {
-        const address = self.split_connection_string(host).address;
+        const address = split_connection_string(host).address;
         const changes = { };
         changes[address] = { ...last.overlay[address] };
         merge(changes[address], values);
@@ -358,49 +405,8 @@ function Machines() {
     });
 
     self.lookup = function lookup(address) {
-        const parts = self.split_connection_string(address);
+        const parts = split_connection_string(address);
         return machines[parts.address || "localhost"] || null;
-    };
-
-    self.generate_connection_string = function (user, port, addr) {
-        let address = addr;
-        if (user)
-            address = user + "@" + address;
-
-        if (port)
-            address = address + ":" + port;
-
-        return address;
-    };
-
-    self.split_connection_string = function(conn_to) {
-        const parts = {};
-        let user_spot = -1;
-        let port_spot = -1;
-
-        if (conn_to) {
-            if (conn_to.substring(0, 6) === "ssh://")
-                conn_to = conn_to.substring(6);
-            user_spot = conn_to.lastIndexOf('@');
-            port_spot = conn_to.lastIndexOf(':');
-        }
-
-        if (user_spot > 0) {
-            parts.user = conn_to.substring(0, user_spot);
-            conn_to = conn_to.substring(user_spot + 1);
-            port_spot = conn_to.lastIndexOf(':');
-        }
-
-        if (port_spot > -1) {
-            const port = parseInt(conn_to.substring(port_spot + 1), 10);
-            if (!isNaN(port)) {
-                parts.port = port;
-                conn_to = conn_to.substring(0, port_spot);
-            }
-        }
-
-        parts.address = conn_to;
-        return parts;
     };
 
     self.close = function close() {
@@ -572,7 +578,7 @@ function Loader(machines, session_only) {
             request.responseType = "json";
             request.open("GET", url, true);
             request.addEventListener("load", () => {
-                const overlay = { manifests: request.response };
+                const overlay = { manifests: import_manifests(request.response) };
                 const etag = request.getResponseHeader("ETag");
                 if (etag) /* and remove quotes */
                     overlay.checksum = etag.replace(/^"(.+)"$/, '$1');
@@ -610,7 +616,7 @@ function Loader(machines, session_only) {
                                if (args[0] == "cockpit.Packages") {
                                    if (args[1].Manifests) {
                                        const manifests = JSON.parse(args[1].Manifests.v);
-                                       machines.overlay(host, { manifests });
+                                       machines.overlay(host, { manifests: import_manifests(manifests) });
                                    }
                                }
                            });
@@ -704,7 +710,7 @@ function Loader(machines, session_only) {
     };
 
     self.expect_restart = function expect_restart(host) {
-        const parts = machines.split_connection_string(host);
+        const parts = split_connection_string(host);
         machines.overlay(parts.address, {
             restarting: true,
             problem: null
@@ -727,6 +733,7 @@ function Loader(machines, session_only) {
         proxy.addEventListener("changed", data => {
             // unwrap variants from D-Bus call
             const wrapped = proxy.Machines;
+            cockpit.assert(typeof wrapped === "object" && wrapped !== null, "unexpected type of Machines property");
             const data_unwrap = {};
             for (const host in wrapped) {
                 const host_props = {};

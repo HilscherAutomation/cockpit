@@ -149,7 +149,7 @@ const OverviewCard = ({ card, plot_state }) => {
 
     const net_menu_items = [
         !client.in_anaconda_mode() && menu_item(nfs_feature, _("New NFS mount"), () => nfs_fstab_dialog(null, null)),
-        menu_item(iscsi_feature, _("Change iSCSI initiater name"), () => iscsi_change_name()),
+        menu_item(iscsi_feature, _("Change iSCSI initiator name"), () => iscsi_change_name()),
         menu_item(iscsi_feature, _("Add iSCSI portal"), () => iscsi_discover()),
     ].filter(item => !!item);
 
@@ -177,7 +177,7 @@ const OverviewCard = ({ card, plot_state }) => {
         <Stack hasGutter>
             { !client.in_anaconda_mode() &&
             <StackItem>
-                <Card>
+                <Card isPlain>
                     <CardBody>
                         <StoragePlots plot_state={plot_state} />
                     </CardBody>
@@ -186,12 +186,12 @@ const OverviewCard = ({ card, plot_state }) => {
             }
             <StackItem>
                 <StorageCard card={card} actions={actions}>
-                    <CardBody className="contains-list">
-                        <ChildrenTable emptyCaption={_("No storage found")}
-                                       aria-label={_("Storage")}
-                                       show_icons
-                                       page={card.page} />
-                    </CardBody>
+                    <ChildrenTable
+                        emptyCaption={_("No storage found")}
+                        aria-label={_("Storage")}
+                        show_icons
+                        page={card.page}
+                    />
                 </StorageCard>
             </StackItem>
             { !client.in_anaconda_mode() &&

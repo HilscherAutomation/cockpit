@@ -60,7 +60,8 @@ class TestWsBastionContainer(testlib.MachineCase):
 
         # Requires a host
         b.click("#login-button")
-        b.wait_in_text("#login-error-message", "host to connect")
+        b.wait_text("#login-error-title", "Please specify the host to connect to")
+        b.wait_not_visible("#login-error-message")
         # so connect to our own container host
         b.set_val("#server-field", HOST)
         b.set_val("#login-password-input", "foobar")
@@ -70,19 +71,37 @@ class TestWsBastionContainer(testlib.MachineCase):
 
         b.wait_visible('#content')
         b.wait_text('#current-username', 'admin')
+        # Our test VM only pre-installs -system and -networkmanager
+        b.wait_in_text("#host-apps", "Overview")
+        b.wait_in_text("#host-apps", "Networking")
+        self.assertNotIn("Kernel dump", b.text("#host-apps"))
+        # runs the ssh target's bridge (no beiboot)
+        m.execute("pgrep -f /usr/bin/[c]ockpit-bridge")
         b.logout()
 
         # remembers the last host via URL, server field should be pre-filled
         self.assertEqual(b.eval_js("window.location.pathname"), f"/={HOST}/system")
-        # FIXME: login page does not really set this in the DOM? DOM has empty value, but browser shows the value
-        # b.wait_text("#server-field", host)
         # this is only for Cockpit Client
         b.wait_not_visible("#recent-hosts")
-        b.set_val("#login-user-input", "admin")
-        b.set_val("#login-password-input", "foobar")
         # second time SSH key is known
-        b.click("#login-button")
+        b.try_login()
         b.wait_visible('#content')
+        b.logout()
+
+        # disable target bridge, should use beiboot
+        m.execute("mount -o bind /dev/null /usr/bin/cockpit-bridge")
+        self.addCleanup(m.execute, "umount /usr/bin/cockpit-bridge")
+        b.try_login()
+        b.wait_visible('#content')
+        m.execute("pgrep -f '[p]ython3 -ic # cockpit-bridge'")
+        # beiboot mode has extra included pages
+        b.wait_in_text("#host-apps", "Overview")
+        b.wait_in_text("#host-apps", "Networking")
+        b.wait_in_text("#host-apps", "Kernel dump")
+        b.wait_in_text("#host-apps", "SELinux")
+        # but Storage and Applications are hidden due to failing manifest conditions
+        self.assertNotIn("Storage", b.text("#host-apps"))
+        self.assertNotIn("Applications", b.text("#host-apps"))
         b.logout()
 
     def testKnownHosts(self):
@@ -115,13 +134,6 @@ class TestWsBastionContainer(testlib.MachineCase):
                   "-e COCKPIT_SSH_KNOWN_HOSTS_FILE=/known_hosts "
                   "localhost/cockpit/ws")
         check_login()
-
-        # connect to all unknown hosts
-        # FIXME: this does not work
-        # m.execute("podman run -d --name cockpit-bastion -p 9090:9090 "
-        #           "-e COCKPIT_SSH_CONNECT_TO_UNKNOWN_HOSTS=1 "
-        #           "localhost/cockpit/ws")
-        # check_login()
 
     def testCustomConf(self):
         m = self.machine
@@ -164,57 +176,139 @@ class TestWsBastionContainer(testlib.MachineCase):
         b = self.browser
 
         KEY_PASSWORD = "sshfoobar"
+
         # old RSA/PEM format
         m.execute(f"ssh-keygen -q -f /root/id_bastion -t rsa -m PEM -N {KEY_PASSWORD}")
         m.execute(f"ssh-keyscan localhost | sed 's/^localhost/{HOST}/' > /root/known_hosts")
         self.addCleanup(m.execute, "rm /root/known_hosts /root/id_bastion /root/id_bastion.pub")
 
-        m.execute("podman run -d --name cockpit-bastion -p 9090:9090 "
-                  "-v /root/known_hosts:/etc/ssh/ssh_known_hosts:ro,Z "
-                  "-v /root/id_bastion:/id_bastion:ro,Z "
-                  "-e COCKPIT_SSH_KEY_PATH=/id_bastion "
-                  "-e G_MESSAGES_DEBUG=cockpit-ssh "
-                  "localhost/cockpit/ws")
-        m.execute("until curl --fail --head -k https://localhost:9090/; do sleep 1; done")
+        def do_test_key_login(ssh_key_env: str):
+            m.execute(
+                "podman run -d --name cockpit-bastion -p 9090:9090 "
+                "-v /root/known_hosts:/etc/ssh/ssh_known_hosts:ro,Z "
+                "-v /root/id_bastion:/id_bastion:ro,Z "
+                f"-e {ssh_key_env}=/id_bastion "
+                "-e COCKPIT_DEBUG=all "
+                "localhost/cockpit/ws"
+            )
+            m.execute("until curl --fail --head -k https://localhost:9090/; do sleep 1; done")
 
+            b.open("/", tls=True)
+            b.set_val("#login-user-input", "admin")
+            b.set_val("#server-field", HOST)
+
+            # the account password does not work
+            b.set_val("#login-password-input", "foobar")
+            b.click("#login-button")
+            b.wait_text("#login-error-title", "Authentication failed")
+            b.wait_text("#login-error-message", "Wrong user name or password")
+
+            # SSH key password, but key is not authorized
+            b.set_val("#login-password-input", KEY_PASSWORD)
+            b.click("#login-button")
+            b.wait_text("#login-error-title", "Authentication failed")
+            b.wait_text("#login-error-message", "Wrong user name or password")
+
+            # authorize key
+            self.restore_file("/home/admin/.ssh/authorized_keys")
+            # Do not use authorized_keys.d as that does not work on rhel4edge
+            # Do not append but overwrite so we are sure the right key is used
+            m.execute("cat /root/id_bastion.pub > /home/admin/.ssh/authorized_keys")
+
+            # fails with wrong key password
+            b.set_val("#login-password-input", "notthispassword")
+            b.click("#login-button")
+            b.wait_text("#login-error-title", "Authentication failed")
+            b.wait_text("#login-error-message", "Wrong user name or password")
+
+            # works with correct key password
+            b.set_val("#login-password-input", KEY_PASSWORD)
+            b.click("#login-button")
+            b.wait_visible('#content')
+            # runs the ssh target's bridge (no beiboot)
+            m.execute("pgrep -f /usr/bin/[c]ockpit-bridge")
+            b.logout()
+
+            # now test with current OpenSSH format
+            m.execute(f"yes | ssh-keygen -q -f /root/id_bastion -t rsa -N {KEY_PASSWORD}")
+            m.execute("cat /root/id_bastion.pub > /home/admin/.ssh/authorized_keys")
+            b.set_val("#login-user-input", "admin")
+            b.set_val("#server-field", HOST)
+            b.set_val("#login-password-input", KEY_PASSWORD)
+            b.click("#login-button")
+            b.wait_visible('#content')
+            b.logout()
+
+            # disable target bridge, should use beiboot
+            m.execute("mount -o bind /dev/null /usr/bin/cockpit-bridge")
+            try:
+                b.try_login(password=KEY_PASSWORD)
+                b.wait_visible('#content')
+                m.execute("pgrep -f '[p]ython3 -ic # cockpit-bridge'")
+            finally:
+                m.execute("umount /usr/bin/cockpit-bridge")
+            b.logout()
+
+            m.execute("podman rm -f -t0 cockpit-bastion")
+            m.execute("rm /home/admin/.ssh/authorized_keys")
+
+        for ssh_key_env in ["COCKPIT_SSH_KEY_PATH", f"COCKPIT_SSH_KEY_PATH_{HOST.upper()}"]:
+            do_test_key_login(ssh_key_env=ssh_key_env)
+
+    def testExternalAgent(self):
+        m = self.machine
+        b = self.browser
+
+        KEY_PASSWORD = "sshfoobar"
+
+        # run the container as user -- as root does not make sense, as we want to
+        # share the user's SSH key with it
+        m.execute(f"podman save localhost/cockpit/ws -o {self.vm_tmpdir}/cockpit-ws.tar")
+
+        # HACK: user podman does not add default route if the host doesn't have any
+        m.execute("ip route add default via 172.27.0.1")
+        self.addCleanup(m.execute, "ip route del default")
+
+        self.restore_dir("/home/admin")
+
+        # podman needs logind session (https://bugzilla.redhat.com/show_bug.cgi?id=2375715)
+        m.execute("loginctl enable-linger admin")
+        self.addCleanup(m.execute, "loginctl disable-linger admin")
+
+        m.execute("runuser -u admin -- sh -ex", input=f"""
+        # we don't start a real login session here, fake it
+        cd $HOME
+        export XDG_RUNTIME_DIR=/run/user/$(id -u)
+
+        # create new key, set it up for logging into host
+        ssh-keygen -q -f ~/.ssh/id_bastion -N {KEY_PASSWORD}
+        cat ~/.ssh/id_bastion.pub > /home/admin/.ssh/authorized_keys
+        ssh-keyscan localhost | sed 's/^localhost/{HOST}/' > ~/.ssh/known_hosts
+
+        # start agent, load key
+        eval $(ssh-agent -a $XDG_RUNTIME_DIR/ssh-agent)
+        printf '#!/bin/sh\necho {KEY_PASSWORD}\n' > /tmp/pwd
+        chmod u+x /tmp/pwd
+        SSH_ASKPASS_REQUIRE=force SSH_ASKPASS=/tmp/pwd ssh-add ~/.ssh/id_bastion
+        rm /tmp/pwd
+        ssh-add -l
+
+        # run container
+        podman load -i {self.vm_tmpdir}/cockpit-ws.tar
+        podman run -d --rm --name cockpit-bastion -p 9090:9090 \
+                -v ~/.ssh/known_hosts:/etc/ssh/ssh_known_hosts:ro \
+                -v $XDG_RUNTIME_DIR/ssh-agent:/ssh-agent \
+                -e SSH_AUTH_SOCK=/ssh-agent \
+                --security-opt=label=disable \
+                -e COCKPIT_DEBUG=all localhost/cockpit/ws
+
+        until curl --fail --head -k https://localhost:9090/; do sleep 1; done
+        """)
+
+        # login works without a password, using the external agent
         b.open("/", tls=True)
-        b.set_val("#login-user-input", "admin")
         b.set_val("#server-field", HOST)
-
-        # the account password does not work
-        b.set_val("#login-password-input", "foobar")
-        b.click("#login-button")
-        b.wait_text_not("#login-error-message", "")
-
-        # SSH key password, but key is not authorized
-        b.set_val("#login-password-input", KEY_PASSWORD)
-        b.click("#login-button")
-        b.wait_text_not("#login-error-message", "")
-
-        # authorize key
-        self.restore_file("/home/admin/.ssh/authorized_keys")
-        # Do not use authorized_keys.d as that does not work on rhel4edge
-        # Do not append but overwrite so we are sure the right key is used
-        m.execute("cat /root/id_bastion.pub > /home/admin/.ssh/authorized_keys")
-
-        # fails with wrong key password
-        b.set_val("#login-password-input", "notthispassword")
-        b.click("#login-button")
-        b.wait_text_not("#login-error-message", "")
-
-        # works with correct key password
-        b.set_val("#login-password-input", KEY_PASSWORD)
-        b.click("#login-button")
-        b.wait_visible('#content')
-        b.logout()
-
-        # now test with current OpenSSH format
-        m.execute(f"yes | ssh-keygen -q -f /root/id_bastion -t rsa -N {KEY_PASSWORD}")
-        m.execute("cat /root/id_bastion.pub > /home/admin/.ssh/authorized_keys")
-        b.set_val("#login-user-input", "admin")
-        b.set_val("#server-field", HOST)
-        b.set_val("#login-password-input", KEY_PASSWORD)
-        b.click("#login-button")
+        b.try_login(password="")
         b.wait_visible('#content')
 
 

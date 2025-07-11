@@ -161,10 +161,6 @@ reserved.
 One such special group name is "default", which contains all channels which
 were opened without specifying a group.
 
-Another one is the "fence" group. While any channels are open in the "fence"
-group, any channels opened after that point will be blocked and wait until all
-channels in the "fence" group are closed before resuming.
-
 The "flow-control" option controls whether a channel should attempt to throttle
 itself via flow control when sending or receiving large amounts of data. The
 current default (when this option is not provided) is to not do flow control.
@@ -361,7 +357,7 @@ Example authorize challenge and response messages:
 ```
 
 Authorize messages are used during authentication by authentication
-commands (ei: cockpit-session, cockpit-ssh) to obtain the users credentials
+commands like `cockpit-session` to obtain the users credentials
 from cockpit-ws. An authentication command can send a authorize message
 with a response but no cookie. For example
 
@@ -778,8 +774,6 @@ payload type:
 
 You may also specify these options:
 
- * "connection": A stable identifier for connection sharing, i.e.
-   sending multiple requests to a single open connection.
  * "headers": JSON object with additional request headers
  * "tls": Set to a object to use an https connection.
 
@@ -852,6 +846,9 @@ following options can be specified:
  * "window": An object containing "rows" and "cols" properties, which set the
    size of the terminal window. Values must be integers between 0 and 0xffff.
    This option is only valid if "pty" is true.
+
+For type "spawn", the `ready` message contains a "pid" field with the spawned
+process ID.
 
 If an "done" is sent to the bridge on this channel, then the socket and/or pipe
 input is shutdown. The channel will send an "done" when the output of the socket
@@ -950,11 +947,11 @@ is simply not reported.
    (`S_IMODE(st_mode)`).  As per JSON, this is transmitted as a decimal value,
    but it is meant to be interpreted in octal, in the usual way.
  * `uid`: an integer, the uid of the file owner (`st_uid`)
- * `owner`: a string, or an integer if the lookup failed
+ * `user`: a string, or an integer if the lookup failed
  * `gid`: an integer, the gid of the file group (`st_gid`)
  * `group`: a string, or an integer if the lookup failed
  * `size`: an integer, the (apparent) size of the file (`st_size`)
- * `modified`: a float, the mtime of the file (`st_mtim`)
+ * `mtime`: a float, the mtime of the file (`st_mtim`)
  * `tag`: a value type: the current 'transaction tag' of the file, with the
    same meaning as elsewhere in this document.  Ideally: this changes if the
    content of the file changes.  This is the same as the tag used in `fsread1`
@@ -1013,67 +1010,6 @@ The life-cycle of the channel works like this:
 
  - The channel will stay open until the client closes it.
 
-Payload: fswatch1
------------------
-
-You will get a stream of change notifications for a file or a
-directory.
-
-The following options can be specified in the "open" control message:
-
- * "path": The path name to watch.  This should be an absolute path to
-   a file or directory.
-
-Each message on the stream will be a JSON object with the following
-fields:
-
- * "event": A string describing the kind of change.  One of "changed",
-   "deleted", "created", "attribute-changed", "moved", or "done-hint".
-
- * "path": The absolute path name of the file that has changed.
-
- * "other": The absolute path name of the other file in case of a "moved"
-   event.
-
- * "type": If the event was created this contains the type of the new file.
-   Will be one of: file, directory, link, special or unknown.
-
-In case of an error, the channel will be closed.  In addition to the
-usual "problem" field, the "close" control message sent by the server
-might have the following additional fields:
-
- * "message": A string in the current locale describing the error.
-
-Payload: fslist1
----------------
-
-A channel of this type lists the files in a directory and will watch
-for further changes.
-
-The following options can be specified in the "open" control message:
-
- * "path": The path name of the directory to watch.  This should be an
-   absolute path.
- * "watch": Boolean, when true the directory will be watched and signal
-    on changes. Defaults to "true"
-
-The channel will send a number of JSON messages that list the current
-content of the directory.  These messages have a "event" field with
-value "present", a "path" field that holds the (relative) name of
-the file, "owner", "group", "size" and "modified" (timestamp) fields with
-some basic file information, and a "type" field. Type will be one of:
-file, directory, link, special or unknown. After all files have been listed the
-"ready" control message will be sent.
-
-Other messages on the stream signal changes to the directory, in the
-same format as used by the "fswatch1" payload type.
-
-In case of an error, the channel will be closed.  In addition to the
-usual "problem" field, the "close" control message sent by the server
-might have the following additional fields:
-
- * "message": A string in the current locale describing the error.
-
 Payload: fsread1
 ----------------
 
@@ -1082,6 +1018,10 @@ Returns the contents of a file and its current 'transaction tag'.
 The following options can be specified in the "open" control message:
 
  * "path": The path name of the file to read.
+ * "max_read_size": option to limit the amount of data that is read.  If the
+   file is larger than the given number of bytes, no data is read and the
+   channel is closed with problem code "too-large".  The default limit is 16
+   MiB.  The limit can be completely removed by setting it to -1.
 
 The ready message contains a "size-hint" when the channel is opened
 with the "binary" option set to "raw".
@@ -1106,7 +1046,7 @@ fields:
  * "tag": The transaction tag for the returned file content.  The tag
    for a non-existing file is "-".
 
-It is not permitted to send data in an fslist1 channel. This channel
+It is not permitted to send data in an fsread1 channel. This channel
 sends a "done" when all file data was sent.
 
 Payload: fsreplace1
@@ -1130,6 +1070,14 @@ The following options can be specified in the "open" control message:
    you don't set this field, the actual tag will not be checked.  To
    express that you expect the file to not exist, use "-" as the tag.
 
+* "attrs": a JSON object containing optional file attributes to set:
+  - `user`: a string, or an integer, the uid of the file owner (`st_uid`).
+    If set `group` also has to be set.
+  - `group`: a string, or an integer, the gid of the file group (`st_gid`)
+    If set `user` also has to be set.
+  - `mode`:  an integer, usually expressed in octal, but in json it is the
+    equivalent value in decimal.
+
 You should write the new content to the channel as one or more
 messages.  To indicate the end of the content, send a "done" message.
 
@@ -1151,9 +1099,9 @@ content will be replaced with a "rename" syscall when the channel is
 closed without problem code.  If the channel is closed with a problem
 code (by either client or server), the file will be left untouched.
 
-If `tag` is given, file owner and mode are preserved (copied from the
-original file). Other attributes (like ACLs or locally modified SELinux
-context) are never copied.
+If `tag` is given and no equivalent `attrs`, file owner, mode and SELinux
+context are preserved (copied from the original file). Other attributes (like
+ACLs) are never copied.
 
 In addition to the usual "problem" field, the "close" control message
 sent by the server might have the following additional fields:

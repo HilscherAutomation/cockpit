@@ -52,6 +52,16 @@ class ChannelRoutingRule(RoutingRule):
         for entry in self.table.values():
             entry.sort(key=lambda cls: len(cls.restrictions), reverse=True)
 
+    def capabilities(self) -> JsonObject:
+        result: 'dict[str, list[str]]' = {}
+
+        for payload, impls in self.table.items():
+            caps: 'list[str]' = []
+            for impl in impls:
+                caps.extend(impl.capabilities)
+            result[payload] = caps
+        return result
+
     def check_restrictions(self, restrictions: 'Collection[tuple[str, object]]', options: JsonObject) -> bool:
         for key, expected_value in restrictions:
             our_value = options.get(key)
@@ -108,6 +118,7 @@ class Channel(Endpoint):
     # Must be filled in by the channel implementation
     payload: 'ClassVar[str]'
     restrictions: 'ClassVar[Sequence[tuple[str, object]]]' = ()
+    capabilities: 'ClassVar[Sequence[str]]' = ()
 
     # These get filled in from .do_open()
     channel = ''
@@ -327,8 +338,8 @@ class Channel(Endpoint):
         """
         return self.send_bytes(data.encode())
 
-    def send_json(self, _msg: 'JsonObject | None' = None, **kwargs: JsonValue) -> bool:
-        pretty = self.json_encoder.encode(create_object(_msg, kwargs)) + '\n'
+    def send_json(self, msg: 'JsonObject | None' = None, **kwargs: JsonValue) -> bool:
+        pretty = self.json_encoder.encode(create_object(msg, kwargs)) + '\n'
         return self.send_text(pretty)
 
     def do_pong(self, message):
@@ -370,6 +381,7 @@ class ProtocolChannel(Channel, asyncio.Protocol):
     _send_pongs: bool = True
     _last_ping: 'JsonObject | None' = None
     _create_transport_task: 'asyncio.Task[asyncio.Transport] | None' = None
+    _ready_info: 'JsonObject | None' = None
 
     # read-side EOF handling
     _close_on_eof: bool = False
@@ -400,7 +412,10 @@ class ProtocolChannel(Channel, asyncio.Protocol):
             return
 
         self.connection_made(transport)
-        self.ready()
+        if self._ready_info is not None:
+            self.ready(**self._ready_info)
+        else:
+            self.ready()
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         assert isinstance(transport, asyncio.Transport)
@@ -518,6 +533,8 @@ class AsyncChannel(Channel):
             self.close()
         except ChannelError as exc:
             self.close(exc.get_attrs())
+        except JsonError as exc:
+            self.close({'problem': 'protocol-error', 'message': str(exc)})
         except BaseException:
             self.close({'problem': 'internal-error', 'cause': traceback.format_exc()})
             raise

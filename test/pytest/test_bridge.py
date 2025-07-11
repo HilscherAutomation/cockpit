@@ -14,14 +14,16 @@ import sys
 import unittest.mock
 from collections import deque
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, Sequence
+from typing import AsyncGenerator, Dict, Generator, Iterator, Sequence, Union
 
 import pytest
+import pytest_asyncio
 
 from cockpit._vendor.systemd_ctypes import bus
 from cockpit.bridge import Bridge
 from cockpit.channel import AsyncChannel, Channel, ChannelRoutingRule
 from cockpit.channels import CHANNEL_TYPES
+from cockpit.channels.filesystem import tag_from_path
 from cockpit.jsonutil import JsonDict, JsonObject, JsonValue, get_bool, get_dict, get_int, get_str, json_merge_patch
 from cockpit.packages import BridgeConfig
 
@@ -66,13 +68,13 @@ def add_pseudo(bridge: Bridge) -> None:
     ])
 
 
-@pytest.fixture
-def no_init_transport(event_loop: asyncio.AbstractEventLoop, bridge: Bridge) -> Iterable[MockTransport]:
+@pytest_asyncio.fixture()
+async def no_init_transport(bridge: Bridge) -> AsyncGenerator[MockTransport, None]:
     transport = MockTransport(bridge)
     try:
         yield transport
     finally:
-        transport.stop(event_loop)
+        await transport.stop()
 
 
 @pytest.fixture
@@ -405,19 +407,37 @@ async def test_internal_metrics(transport: MockTransport) -> None:
     # cpu.core.user instances should be the same as meta sent instances
     assert instances == len(data[0][0])
     # all instances should be False, as this is a rate
-    assert not all(d for d in data[0][0])
+    assert all(d is False for d in data[0][0])
     # memory.used should be an integer
     assert isinstance(data[0][1], int)
 
+    # next data for rate should not be False
+    _, data = await transport.next_frame()
+    data = json.loads(data)
+    assert all(d is not False for d in data[0][0])
+
 
 @pytest.mark.asyncio
-async def test_fsread1_errors(transport: MockTransport) -> None:
+async def test_fsread1_errors(transport: MockTransport, tmp_path: Path) -> None:
     await transport.check_open('fsread1', path='/etc/shadow', problem='access-denied')
     await transport.check_open('fsread1', path='/', problem='internal-error',
                                reply_keys={'message': "[Errno 21] Is a directory: '/'"})
     await transport.check_open('fsread1', path='/etc/passwd', max_read_size="lol",
                                problem='protocol-error',
                                reply_keys={'message': "attribute 'max_read_size': must have type int"})
+    await transport.check_open('fsread1', path='/etc/passwd', max_read_size=1,
+                               problem='too-large')
+    # default read size limit
+    big_file = tmp_path / 'bigfile.img'
+    fd = os.open(big_file, os.O_RDWR | os.O_CREAT)
+    os.posix_fallocate(fd, 0, 17 * 1024 * 1024)
+    os.close(fd)
+    await transport.check_open('fsread1', path=str(big_file),
+                               problem='too-large')
+
+    # -1 implies no limit
+    await transport.check_open('fsread1', path=str(big_file),
+                               max_read_size=-1)
 
 
 @pytest.mark.asyncio
@@ -475,6 +495,28 @@ async def test_fslist1_notexist(transport: MockTransport) -> None:
         reply_keys={'message': "[Errno 2] No such file or directory: '/nonexisting'"})
 
 
+class GrpPwMock:
+    def __init__(self, uid: 'int', gid: 'int | None' = None) -> None:
+        self.pw_uid = uid
+        self.gr_gid = gid
+
+    def __str__(self) -> str:
+        return f'uid={self.pw_uid},gid={self.gr_gid}'
+
+
+@pytest.fixture
+def fchown_mock() -> Generator[unittest.mock.MagicMock, unittest.mock.MagicMock, None]:
+    with unittest.mock.patch('os.fchown', return_value=True) as fchown_mock:
+        yield fchown_mock
+
+
+@pytest.fixture
+def user_group_mock(user_group_mock_arg: GrpPwMock) -> Generator[GrpPwMock, GrpPwMock, None]:
+    with unittest.mock.patch('pwd.getpwnam', return_value=user_group_mock_arg):
+        with unittest.mock.patch('grp.getgrnam', return_value=user_group_mock_arg):
+            yield user_group_mock_arg
+
+
 @pytest.mark.asyncio
 async def test_fsreplace1(transport: MockTransport, tmp_path: Path) -> None:
     # create non-existing file
@@ -487,6 +529,10 @@ async def test_fsreplace1(transport: MockTransport, tmp_path: Path) -> None:
     assert myfile.read_bytes() == b'some stuff'
     # no leftover files
     assert os.listdir(tmp_path) == ['newfile']
+    # default umask is applied
+    prev_umask = os.umask(0)
+    os.umask(prev_umask)
+    assert stat.S_IMODE(myfile.stat().st_mode) == 0o666 & ~prev_umask
 
     # now update its contents
     ch = await transport.check_open('fsreplace1', path=str(myfile))
@@ -523,6 +569,16 @@ async def test_fsreplace1(transport: MockTransport, tmp_path: Path) -> None:
     # preserves existing permissions when giving expected tag
     assert stat.S_IMODE(myfile.stat().st_mode) == perms
 
+    # mode supplied via attrs overrides existing permissions
+    new_perms = 0o422
+    ch = await transport.check_open('fsreplace1', path=str(myfile), attrs={'mode': new_perms})
+    transport.send_data(ch, b'in the future')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(channel=ch)
+    assert myfile.read_bytes() == b'in the future'
+    assert stat.S_IMODE(myfile.stat().st_mode) == new_perms
+
     # write empty file
     ch = await transport.check_open('fsreplace1', path=str(myfile))
     transport.send_data(ch, b'')
@@ -547,6 +603,43 @@ async def test_fsreplace1(transport: MockTransport, tmp_path: Path) -> None:
     transport.send_done(ch)
     await transport.assert_msg('', command='done', channel=ch)
     await transport.check_close(channel=ch)
+
+    # tag is "-" and file should not exist
+    newfile = tmp_path / 'new'
+    ch = await transport.check_open('fsreplace1', path=str(newfile), tag='-')
+    transport.send_data(ch, b'some stuff')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(channel=ch)
+    assert newfile.read_text() == 'some stuff'
+
+    # delete the now written newfile with tag='-' the file should now exist so this should fail
+    ch = await transport.check_open('fsreplace1', path=str(newfile), tag='-')
+    transport.send_done(ch)
+    await transport.assert_msg('', problem='change-conflict', channel=ch)
+    assert newfile.exists()
+
+    # create file with a custom mode
+    newfile.unlink()
+    assert not newfile.exists()
+    ch = await transport.check_open('fsreplace1', path=str(newfile), attrs={'mode': perms})
+    transport.send_data(ch, b'some stuff')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(channel=ch)
+    assert newfile.read_text() == 'some stuff'
+    assert stat.S_IMODE(newfile.stat().st_mode) == perms
+
+    # create file with tag='-' and custom mode
+    newfile.unlink()
+    assert not newfile.exists()
+    ch = await transport.check_open('fsreplace1', path=str(newfile), tag='-', attrs={'mode': perms})
+    transport.send_data(ch, b'some stuff')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(channel=ch)
+    assert newfile.read_text() == 'some stuff'
+    assert stat.S_IMODE(newfile.stat().st_mode) == perms
 
 
 @pytest.mark.asyncio
@@ -632,6 +725,109 @@ async def test_fsreplace1_error(transport: MockTransport, tmp_path: Path) -> Non
                                reply_keys={
                                    'message': """attribute 'send-acks': invalid value "not-valid" not in ['bytes']"""
     })
+
+    await transport.check_open('fsreplace1', path=str(tmp_path / 'test'),
+                               attrs={'user': 'cockpit', 'group': 'cockpit', 'selinux': True},
+                               problem='protocol-error',
+                               reply_keys={
+                                   'message': '"attrs" contains unsupported key(s): selinux',
+                                   'unsupported_attrs': ['selinux']
+    })
+
+    await transport.check_open('fsreplace1', path=str(tmp_path / 'test'), attrs={'user': 'cockpit'},
+                               problem='protocol-error',
+                               reply_keys={
+                                   'message': '"group" attribute is empty while "user" is provided'
+    })
+
+    await transport.check_open('fsreplace1', path=str(tmp_path / 'test'), attrs={'group': 'cockpit'},
+                               problem='protocol-error',
+                               reply_keys={
+                                   'message': '"user" attribute is empty while "group" is provided'
+    })
+
+    await transport.check_open('fsreplace1', path=str(tmp_path / 'test'), attrs={'user': 'cockpit', 'group': []},
+                               problem='protocol-error',
+                               reply_keys={
+                                   'message': "attribute 'attrs': attribute 'group': must be a string or integer"
+    })
+
+    await transport.check_open('fsreplace1', path=str(tmp_path / 'test'), attrs={'user': [], 'group': 'test'},
+                               problem='protocol-error',
+                               reply_keys={
+                                   'message': "attribute 'attrs': attribute 'user': must be a string or integer"
+    })
+
+    mock_val = GrpPwMock(uid=0, gid=1000)
+    with unittest.mock.patch('pwd.getpwnam', side_effect=KeyError()):
+        await transport.check_open('fsreplace1', path=str(tmp_path / 'test'),
+                                   attrs={'user': 'bazinga', 'group': 'foo'},
+                                   problem='not-found',
+                                   reply_keys={
+                                       'message': 'uid not found for bazinga'
+        })
+
+    with unittest.mock.patch('pwd.getpwnam', return_value=mock_val):
+        with unittest.mock.patch('grp.getgrnam', side_effect=KeyError()):
+            await transport.check_open('fsreplace1', path=str(tmp_path / 'test'),
+                                       attrs={'user': 'bazinga', 'group': 'test'},
+                                       problem='not-found',
+                                       reply_keys={
+                                           'message': 'gid not found for test'
+            })
+
+
+ATTRS_TEST_DATA = [
+    (GrpPwMock(1111, 1110), {'user': 1111, 'group': 1110}),
+    (GrpPwMock(1111, 1110), {'user': 'monkey', 'group': 'group'}),
+]
+
+
+@pytest.mark.parametrize(('user_group_mock_arg', 'attrs'), ATTRS_TEST_DATA)
+@pytest.mark.asyncio
+async def test_fsreplace1_attrs(transport: MockTransport, fchown_mock: unittest.mock.MagicMock,
+                                tmp_path: Path, user_group_mock, attrs: Dict[str, Union[int, str]]) -> None:
+    async def existing_file_with_attrs(filename: str, tag: str) -> None:
+        test_file = tmp_path / filename
+        ch = await transport.check_open('fsreplace1', path=str(test_file), attrs=attrs, tag=tag)
+        transport.send_data(ch, b'content')
+        transport.send_done(ch)
+        await transport.assert_msg('', command='done', channel=ch)
+        await transport.check_close(ch)
+        assert test_file.read_bytes() == b'content'
+
+    async def create_file_with_attrs(filename: str) -> None:
+        test_file = tmp_path / filename
+        ch = await transport.check_open('fsreplace1', path=str(test_file), attrs=attrs)
+        transport.send_data(ch, b'content')
+        transport.send_done(ch)
+        await transport.assert_msg('', command='done', channel=ch)
+        await transport.check_close(ch)
+        assert test_file.read_bytes() == b'content'
+
+    await create_file_with_attrs('test')
+    fchown_mock.assert_called()
+    _, call_uid, call_gid = fchown_mock.call_args[0]
+    assert call_uid == user_group_mock.pw_uid
+    if user_group_mock.gr_gid is None:
+        assert call_gid == user_group_mock.pw_uid
+    else:
+        assert call_gid == user_group_mock.gr_gid
+
+    # Existing file
+    existing_file = tmp_path / 'existing'
+    existing_file.write_text('new')
+
+    tag = tag_from_path(existing_file)
+    assert tag is not None
+    await existing_file_with_attrs('existing', tag)
+    fchown_mock.assert_called()
+    _, call_uid, call_gid = fchown_mock.call_args[0]
+    assert call_uid == user_group_mock.pw_uid
+    if user_group_mock.gr_gid is None:
+        assert call_gid == user_group_mock.pw_uid
+    else:
+        assert call_gid == user_group_mock.gr_gid
 
 
 @pytest.mark.asyncio
@@ -743,8 +939,10 @@ async def test_channel(bridge: Bridge, transport: MockTransport, channeltype, tm
             args = {'spawn': ['cat']}
         else:
             args = {'unix': srv}
-    elif payload == 'metrics1':
+    elif payload == 'metrics1' and channeltype.restrictions:
         args['metrics'] = [{'name': 'memory.free'}]
+    elif payload == 'metrics1':
+        pytest.skip('no PCP metric data')
     elif payload == 'dbus-json3':
         if not os.path.exists('/run/dbus/system_bus_socket'):
             pytest.skip('no dbus')
@@ -763,6 +961,10 @@ async def test_channel(bridge: Bridge, transport: MockTransport, channeltype, tm
             assert control['channel'] == ch
             command = control['command']
             if command == 'ready':
+                if 'spawn' in args:
+                    assert isinstance(control['pid'], int)
+                    with open(f"/proc/{control['pid']}/cmdline") as f:
+                        assert f.read() == 'cat\0'
                 # If we get ready, it's our turn to send data first.
                 # Hopefully we didn't receive any before.
                 assert not saw_data
@@ -1159,7 +1361,7 @@ async def test_fsinfo_onlydir(transport: MockTransport, fsinfo_test_cases: 'dict
 
         # with '/' appended, this should only open dirs
         client = await FsInfoClient.open(transport, str(path) + '/')
-        assert await client.wait() == expected_state
+        assert await client.wait() == expected_state, f'for {path}'
 
 
 @pytest.mark.asyncio
@@ -1387,3 +1589,39 @@ async def test_fsinfo_targets(transport: MockTransport, tmp_path: Path) -> None:
     # double-check with the non-watch variant
     client = await FsInfoClient.open(transport, tmp_path, ['type', 'target', 'targets'], fnmatch='l*')
     assert await client.wait() == state
+
+
+@pytest.mark.asyncio
+async def test_fsinfo_access_attrs(transport: MockTransport, fsinfo_test_cases: 'dict[Path, JsonObject]') -> None:
+    for path, expected_state in fsinfo_test_cases.items():
+        # these are errors
+        if path.name == 'dangling' or path.name == 'loopy':
+            continue
+
+        read_ok = True
+        write_ok = True
+        exec_ok = path.is_dir()
+
+        if path.name == 'no-r-dir':
+            read_ok = False
+        elif path.name == 'no-x-dir':
+            exec_ok = False
+        elif path.name == 'no-r-file':
+            read_ok = False
+            write_ok = False
+            exec_ok = False
+
+        expected_state = {'info': {'r-ok': read_ok, 'w-ok': write_ok, 'x-ok': exec_ok}}
+
+        # fnmatch='' to not include entries
+        client = await FsInfoClient.open(transport, path, attrs=['w-ok', 'r-ok', 'x-ok'], fnmatch='')
+        assert await client.wait() == expected_state, f'for path={path.name}'
+
+    # Symlink access bits are always allowed
+    for path, expected_state in fsinfo_test_cases.items():
+        if path.name != 'dev':
+            continue
+
+        expected_state = {'info': {'r-ok': True, 'w-ok': True, 'x-ok': True}}
+        client = await FsInfoClient.open(transport, path, attrs=['w-ok', 'r-ok', 'x-ok'], follow=False)
+        assert await client.wait() == expected_state, f'for path={path.name}'

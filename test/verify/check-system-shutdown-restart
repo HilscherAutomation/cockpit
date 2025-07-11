@@ -20,6 +20,7 @@
 import testlib
 
 
+@testlib.skipBeiboot("host switching disabled in beiboot mode")
 class TestShutdownRestart(testlib.MachineCase):
     provision = {
         "machine1": {"address": "10.111.113.1/20", "memory_mb": 512},
@@ -30,13 +31,16 @@ class TestShutdownRestart(testlib.MachineCase):
         super().setUp()
         self.setup_provisioned_hosts()
 
-    @testlib.todoPybridgeRHEL8()
     def testBasic(self):
         m = self.machine
         b = self.browser
 
         m2 = self.machines['machine2']
         b2 = self.new_browser(m2)
+
+        # Disable pre-loading packagekit, dnf needs-restarting (dnf 4) consumes tons of cpu/memory on RHEL-10-1
+        self.disable_preload("packagekit")
+        self.disable_preload("packagekit", machine=m2)
 
         self.enable_multihost(m2)
 
@@ -51,18 +55,17 @@ class TestShutdownRestart(testlib.MachineCase):
         b.set_input_text("#message", "Rebooting for maintenance")
         b.click("#delay")
         b.click("button:contains('No delay')")
-        b.wait_text("#delay .pf-v5-c-select__toggle-text", "No delay")
+        b.wait_text("#delay .pf-v6-c-menu-toggle__text", "No delay")
         b.click(f"#shutdown-dialog button{self.danger_btn_class}")
         b.switch_to_top()
 
         b.wait_in_text(".curtains-ct h1", "Disconnected")
 
-        m.wait_reboot()
+        self.wait_reboot()
         m.start_cockpit()
         b.click("#machine-reconnect")
         b.wait_visible("#login")
 
-        self.allow_restart_journal_messages()
         self.allow_journal_messages("Shutdown scheduled for .*")
         self.check_journal_messages()
 
@@ -80,19 +83,19 @@ class TestShutdownRestart(testlib.MachineCase):
         b2.wait_in_text(f"#shutdown-dialog button{self.danger_btn_class}", 'Reboot')
         b2.click("#delay")
         b2.click("button:contains('No delay')")
-        b2.wait_text("#delay .pf-v5-c-select__toggle-text", "No delay")
+        b2.wait_text("#delay .pf-v6-c-menu-toggle__text", "No delay")
         b2.click(f"#shutdown-dialog button{self.danger_btn_class}")
         b2.switch_to_top()
 
         b2.wait_visible(".curtains-ct")
-        b2.wait_visible(".curtains-ct .pf-v5-c-spinner")
+        b2.wait_visible(".curtains-ct .pf-v6-c-spinner")
         b2.wait_in_text(".curtains-ct h1", "rebooting")
 
-        m.wait_reboot()
+        self.wait_reboot()
 
         with b2.wait_timeout(30):
             b2.wait_visible("#machine-troubleshoot")
-        b2.start_machine_troubleshoot(password="foobar")
+        b2.start_machine_troubleshoot(password="foobar", expect_warning=False)
 
         b2.enter_page("/system", host="10.111.113.1", reconnect=False)
 
@@ -105,7 +108,7 @@ class TestShutdownRestart(testlib.MachineCase):
         b.wait_not_present("#delay-helper")
         b.click("#delay")
         b.click("button:contains('Specific time')")
-        b.wait_text("#delay .pf-v5-c-select__toggle-text", "Specific time")
+        b.wait_text("#delay .pf-v6-c-menu-toggle__text", "Specific time")
         b.wait_not_val("#shutdown-time-input", "")
         b.wait_not_present("#delay-helper")
         old = b.val("#shutdown-time-input")
@@ -128,7 +131,7 @@ class TestShutdownRestart(testlib.MachineCase):
         b.click("button[aria-label='Toggle date picker']")
         today_label = m.execute("date +'%-d %B %Y'").strip()
         today_format = m.execute("date +'%Y-%m-%d'").strip()
-        b.click(f".pf-v5-c-calendar-month__dates-cell:not(.pf-m-adjacent-month) button[aria-label='{today_label}']")
+        b.click(f".pf-v6-c-calendar-month__dates-cell:not(.pf-m-adjacent-month) button[aria-label='{today_label}']")
         b.wait_val(".shutdown-date-picker input", today_format)
         b.blur(".shutdown-date-picker input")
 

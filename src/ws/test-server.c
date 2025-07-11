@@ -121,7 +121,6 @@ mock_http_info (CockpitWebRequest *request,
                 CockpitWebResponse *response)
 {
   g_autoptr(JsonObject) info = json_object_new ();
-  json_object_set_boolean_member (info, "pybridge", strstr (bridge_argv[0], "py") != NULL);
   json_object_set_boolean_member (info, "skip_slow_tests", g_getenv ("COCKPIT_SKIP_SLOW_TESTS") != NULL);
 
   g_autoptr(GBytes) bytes = cockpit_json_write_bytes (info);
@@ -960,8 +959,8 @@ main (int argc,
   g_assert (g_mkdir_with_parents (machines_dir, 0755) == 0);
 
   cockpit_setenv_check ("PYTHONPATH", SRCDIR "/src", TRUE);
-  cockpit_setenv_check ("XDG_DATA_HOME", SRCDIR "/src/bridge/mock-resource/home", TRUE);
-  cockpit_setenv_check ("XDG_DATA_DIRS", SRCDIR "/src/bridge/mock-resource/system", TRUE);
+  cockpit_setenv_check ("XDG_DATA_HOME", SRCDIR "/test/data/mock-resource/home", TRUE);
+  cockpit_setenv_check ("XDG_DATA_DIRS", SRCDIR "/test/data/mock-resource/system", TRUE);
   cockpit_setenv_check ("XDG_CONFIG_DIRS", config_dir, TRUE);
 
   setup_path (argv[0]);
@@ -1017,9 +1016,6 @@ main (int argc,
     bridge_argv[i++] = "-m";
     bridge_argv[i++] = "cockpit.bridge";
   }
-
-  // Use a local ssh session command
-  cockpit_ws_ssh_program = BUILDDIR "/cockpit-ssh";
 
   loop = g_main_loop_new (NULL, FALSE);
 

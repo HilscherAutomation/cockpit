@@ -284,17 +284,19 @@ class WebdriverBidi:
         Set a custom one if you call a function which waits/polls for something
         for a non-trivial duration.
         """
-        payload = json.dumps({"id": self.last_id, "method": method, "params": params})
-        log_command.info("← %s(%r) [id %i]", method, 'quiet' if quiet else params, self.last_id)
+        tag = self.last_id
+        self.last_id += 1
+
+        payload = json.dumps({"id": tag, "method": method, "params": params})
+        log_command.info("← %s(%r) [id %i]", method, 'quiet' if quiet else params, tag)
         await self.ws.send_str(payload)
         future = asyncio.get_event_loop().create_future()
-        self.pending_commands[self.last_id] = future
+        self.pending_commands[tag] = future
         res = await asyncio.wait_for(future, timeout=timeout)
         if "result" in res:
-            log_proto.debug("[id %i] unpacking raw result %r", self.last_id, res["result"])
+            log_proto.debug("[id %i] unpacking raw result %r", tag, res["result"])
             value = unpack_value(res["result"])
             res["result"] = value
-        self.last_id += 1
         if not quiet:
             log_command.info("→ %r", res)
         return res
@@ -326,6 +328,9 @@ class WebdriverBidi:
         self.context = self.top_context
         log_command.info("← switch_to_top")
 
+    def in_top_context(self) -> bool:
+        return self.context == self.top_context
+
     @contextlib.contextmanager
     def restore_context(self) -> Iterator[None]:
         saved = self.context
@@ -345,7 +350,7 @@ class ChromiumBidi(WebdriverBidi):
 
         candidate_binaries = ["/usr/bin/chromium-browser", "/usr/bin/chromium"]
         if self.headless:
-            candidate_binaries.insert(0, "/usr/lib64/chromium-browser/headless_shell")
+            candidate_binaries.append("/usr/lib64/chromium-browser/headless_shell")
         binaries = [path for path in candidate_binaries if os.path.exists(path)]
         if not binaries:
             raise WebdriverError(f"no Chromium binary found: tried {' '.join(candidate_binaries)}")
@@ -451,8 +456,15 @@ class FirefoxBidi(WebdriverBidi):
         self.profiledir = self.homedir / "profile"
         self.profiledir.mkdir()
         (self.profiledir / "user.js").write_text(f"""
-            user_pref("remote.enabled", true);
-            user_pref("remote.frames.enabled", true);
+            // https://bugzilla.mozilla.org/show_bug.cgi?id=1947402
+            user_pref('remote.events.async.enabled', false);
+
+            // set this to "Trace" for debugging BiDi interactions
+            user_pref('remote.log.level', 'Warn');
+            user_pref('remote.log.truncate', false);
+            // enable remote logs on stdout
+            user_pref('browser.dom.window.dump.enabled', true);
+
             user_pref("app.update.auto", false);
             user_pref("datareporting.policy.dataSubmissionEnabled", false);
             user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);

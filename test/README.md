@@ -22,8 +22,12 @@ You first need to build cockpit, and install it into a VM:
 
     test/image-prepare
 
-This uses the default OS image, which is currently Fedora 39. See `$TEST_OS`
-below how to select a different one.
+This uses the default OS image. See `$TEST_OS` below how to select a different one.
+
+See `test/image-prepare --help` for some special modes, like skipping unit
+tests, building overlays, or preparing an image with the
+[cockpit/ws container](https://quay.io/repository/cockpit/ws) instead of RPMs.
+See our scenarios in [test/run](./run) for how they are being used.
 
 In most cases you want to run an individual test in a suite, for example:
 
@@ -82,6 +86,11 @@ image like so:
 Once the machine is booted and the cockpit socket has been activated, a
 message will be printed describing how to access the virtual machine, via
 ssh and web.  See the "Helpful tips" section below.
+
+To login using the web client you have to use the username and password listed below. If you wish to enable `root` login using the web you can remove `root` from `/etc/cockpit/disallowed-users`.
+
+- Username: `admin`
+- Password: `foobar`
 
 By default, it's only possible to contact the virtual machine from the host
 machine on which it's running.   If you want to conduct manual testing from
@@ -164,32 +173,23 @@ to push pixel tests.
 
 You can set these environment variables to configure the test suite:
 
-    TEST_OS    The OS to run the tests in.  Currently supported values:
-                  "centos-9-stream"
-                  "centos-10"
-                  "debian-stable"
-                  "debian-testing"
-                  "fedora-40"
-                  "fedora-coreos"
-                  "rhel-9-4"
-                  "ubuntu-2204"
-                  "ubuntu-stable"
-               "fedora-40" is the default (TEST_OS_DEFAULT in bots/lib/constants.py)
+ * `TEST_OS`: The OS to run the tests in, like "fedora-coreos" or
+    "debian-stable". See the "cockpit-project/cockpit" section in the
+    [test map](https://github.com/cockpit-project/bots/blob/main/lib/testmap.py)
+    for all supported values. "fedora-41" is the default (`TEST_OS_DEFAULT` in
+    bots' [constants.py](https://github.com/cockpit-project/bots/blob/main/lib/constants.py)).
 
-    TEST_JOBS  How many tests to run in parallel.  The default is 1.
+ * `TEST_JOBS`:  How many tests to run in parallel.  The default is 1.
 
-    TEST_BROWSER  What browser should be used for testing. Currently supported values:
-                     "chromium"
-                     "firefox"
-                  "chromium" is the default.
+ * `TEST_BROWSER`: What browser should be used for testing. Currently supported
+   values are "chromium" and "firefox". "chromium" is the default.
 
-    TEST_SHOW_BROWSER  Set to run browser interactively. When not specified,
-                       browser is run in headless mode. When set to "pixels",
-                       the browser will be resized to the exact dimensions that
-                       are used for pixel tests.
+ * `TEST_SHOW_BROWSER`: Set to run browser interactively. When not specified,
+   browser is run in headless mode. When set to "pixels", the browser will be
+   resized to the exact dimensions that are used for pixel tests.
 
-    TEST_TIMEOUT_FACTOR Scale normal timeouts by given integer. Useful for
-                        slow/busy testbeds or architectures.
+ * `TEST_TIMEOUT_FACTOR`: Scale normal timeouts by given integer. Useful for
+   slow/busy testbeds or architectures.
 
 See the [bots documentation](https://github.com/cockpit-project/bots/blob/main/README.md)
 for details about the tools and configuration for these.

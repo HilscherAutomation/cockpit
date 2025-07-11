@@ -24,6 +24,7 @@ import { useEvent } from "hooks.js";
 
 import { AlertGroup } from "@patternfly/react-core/dist/esm/components/Alert/index.js";
 import { Card, CardHeader, CardTitle, CardBody } from "@patternfly/react-core/dist/esm/components/Card/index.js";
+import { Divider } from '@patternfly/react-core/dist/esm/components/Divider/index.js';
 import { DropdownGroup, DropdownList } from '@patternfly/react-core/dist/esm/components/Dropdown/index.js';
 import { Stack, StackItem } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
 import { Split, SplitItem } from "@patternfly/react-core/dist/esm/layouts/Split/index.js";
@@ -38,7 +39,10 @@ import { Spinner } from "@patternfly/react-core/dist/esm/components/Spinner/inde
 import { DescriptionListDescription, DescriptionListGroup, DescriptionListTerm } from "@patternfly/react-core/dist/esm/components/DescriptionList/index.js";
 import { Flex, FlexItem } from "@patternfly/react-core/dist/esm/layouts/Flex/index.js";
 
-import { decode_filename, block_short_name, fmt_size } from "./utils.js";
+import {
+    decode_filename, block_short_name, fmt_size,
+    reset_available_spaces
+} from "./utils.js";
 import { StorageButton, StorageBarMenu, StorageMenuItem, StorageSize } from "./storage-controls.jsx";
 import { MultipathAlert } from "./multipath.jsx";
 import { JobsPanel } from "./jobs-panel.jsx";
@@ -61,7 +65,7 @@ const _ = cockpit.gettext;
    The tree of pages starts with "make_overview_page" in
    overview/overview.jsx. That function creates the data structures
    that represent the overview page (using functions exported from
-   this file), and is also responsible for kicking of the creation of
+   this file), and is also responsible for kicking off the creation of
    its child pages. (And each page construction function of course
    also creates the cards and actions for that page).
 
@@ -141,6 +145,7 @@ export const PAGE_CATEGORY_NETWORK = 3;
 export function reset_pages() {
     pages = new Map();
     crossrefs = new Map();
+    reset_available_spaces();
 }
 
 function name_from_card(card) {
@@ -336,8 +341,11 @@ function make_page_kebab(page) {
     let c = page.card;
     while (c) {
         const g = card_item_group(c);
-        if (g)
+        if (g) {
+            if (items.length > 0)
+                items.push(<Divider key={"div" + items.length} />);
             items.push(g);
+        }
         c = c.next;
     }
 
@@ -464,7 +472,7 @@ let narrow_query = null;
 
 export const useIsNarrow = (onChange) => {
     if (!narrow_query) {
-        const val = window.getComputedStyle(window.document.body).getPropertyValue("--pf-v5-global--breakpoint--md");
+        const val = window.getComputedStyle(window.document.body).getPropertyValue("--pf-t--global--breakpoint--md");
         narrow_query = window.matchMedia(`(max-width: ${val})`);
     }
     useEvent(narrow_query, "change", onChange);
@@ -524,62 +532,60 @@ export const PageTable = ({ emptyCaption, aria_label, pages, crossrefs, sorted, 
                 size = <StorageSize size={size} />;
         }
 
-        function onClick(event) {
-            if (!event || event.button !== 0)
-                return;
-
-            if (page.location)
-                cockpit.location.go(page.location);
-        }
-
-        function is_clickable(element) {
-            return element.classList.contains("pf-m-clickable");
-        }
-
-        function next_clickable_sibling(element) {
-            do {
-                const next = element.nextElementSibling;
-                if (next && is_clickable(next))
-                    return next;
-                element = next;
-            } while (element);
-
-            return null;
-        }
-
-        function previous_clickable_sibling(element) {
-            do {
-                const prev = element.previousElementSibling;
-                if (prev && is_clickable(prev))
-                    return prev;
-                element = prev;
-            } while (element);
-
+        function find_button(element, parent_node_name, field) {
+            let column = 0;
+            while (element && element.nodeName != parent_node_name) {
+                if (element.nodeName == "TD") {
+                    let td = element;
+                    while (td) {
+                        column++;
+                        td = td.previousElementSibling;
+                    }
+                }
+                element = element.parentElement;
+            }
+            if (!element)
+                return null;
+            const selector = column > 0 ? `td:nth-child(${column}) button` : "button";
+            while ((element = element[field])) {
+                const button = element.querySelector(selector);
+                if (button)
+                    return button;
+            }
             return null;
         }
 
         function onRowKeyDown(event) {
             const { code, target } = event;
 
-            if (target.nodeName == "TR") {
-                if (code == "Space" || code == "Enter") {
-                    if (page.location)
-                        cockpit.location.go(page.location);
-                    event.preventDefault();
-                }
-                if (code == "ArrowDown") {
-                    const next = next_clickable_sibling(target);
-                    if (next)
-                        next.focus();
-                    event.preventDefault();
-                }
-                if (code == "ArrowUp") {
-                    const prev = previous_clickable_sibling(target);
-                    if (prev)
-                        prev.focus();
-                    event.preventDefault();
-                }
+            function step(parent_node_name, field) {
+                find_button(target, parent_node_name, field)?.focus();
+                event.preventDefault();
             }
+
+            if (code == "ArrowDown")
+                step("TR", "nextElementSibling");
+            else if (code == "ArrowUp")
+                step("TR", "previousElementSibling");
+            else if (code == "ArrowRight")
+                step("TD", "nextElementSibling");
+            else if (code == "ArrowLeft")
+                step("TD", "previousElementSibling");
+        }
+
+        function location_link(id, location) {
+            if (!location)
+                return null;
+            if (typeof location == "string")
+                return location;
+            if (!location.to)
+                return location.label;
+
+            return (
+                <Button ouiaId={id} isInline variant="link" onClick={() => cockpit.location.go(location.to)}>
+                    <Truncate content={location.label} />
+                </Button>
+            );
         }
 
         const is_new = firstKeys.current != false && !firstKeys.current.has(key);
@@ -587,48 +593,50 @@ export const PageTable = ({ emptyCaption, aria_label, pages, crossrefs, sorted, 
 
         if (narrow) {
             rows.push(
-                <Card key={key} onClick={onClick}
+                <Card isPlain key={key}
                       className={"ct-small-table-card" +
-                                 (page.location ? " ct-clickable-card" : null) +
                                  (is_new ? " ct-new-item" : "")}
                       data-test-row-name={page.name}
-                      data-test-row-location={page.columns[1]}>
+                      data-test-row-location={location?.label || location}>
                     <CardBody>
                         <Split hasGutter>
                             { icon && <SplitItem>{icon}</SplitItem> }
-                            <SplitItem isFilled><strong><Truncate content={name} /></strong>{info}</SplitItem>
+                            <SplitItem isFilled>
+                                {location_link("id-link", { to: page.location, label: <strong>{name}</strong> })}
+                                {info}
+                            </SplitItem>
                             <SplitItem>{actions}</SplitItem>
                         </Split>
                         <Split hasGutter isWrappable>
                             <SplitItem>{type}</SplitItem>
-                            <SplitItem isFilled>{location}</SplitItem>
-                            <SplitItem isFilled className="pf-v5-u-text-align-right">{size}</SplitItem>
+                            <SplitItem isFilled>{location_link("location-link", location)}</SplitItem>
+                            <SplitItem isFilled className="pf-v6-u-text-align-end">{size}</SplitItem>
                         </Split>
                     </CardBody>
                 </Card>);
         } else {
             const cols = [
-                <Td key="1" onClick={onClick}>
+                <Td key="1">
                     <div className="indent" style={ { "--level": level } }>
-                        <Truncate content={name} />
+                        {location_link("id-link", { to: page.location, label: name })}
                         {info}
                     </div>
                 </Td>,
-                <Td key="2" onClick={onClick} modifier="nowrap">{type}</Td>,
-                <Td key="3" onClick={onClick} modifier="nowrap">{location}</Td>,
-                <Td key="4" onClick={onClick} className="storage-size-column">{size}</Td>,
-                <Td key="5" className="pf-v5-c-table__action">{actions || <div /> }</Td>,
+                <Td key="2" modifier="nowrap">{type}</Td>,
+                <Td key="3" modifier="nowrap">{location_link("location-link", location)}</Td>,
+                <Td key="4" className="storage-size-column">{size}</Td>,
+                <Td key="5" className="pf-v6-c-table__action">{actions || <div /> }</Td>,
             ];
             if (show_icons)
-                cols.unshift(<Td key="0" onClick={onClick} className="storage-device-icon">{icon}</Td>);
+                cols.unshift(<Td key="0" className="storage-device-icon">{icon}</Td>);
 
             rows.push(
                 <Tr key={key}
                     className={(border ? "" : " remove-border") +
                                (is_new ? " ct-new-item" : "")}
-                    data-test-row-name={page.name} data-test-row-location={page.columns[1]}
-                    isClickable={!!page.location}
-                    onKeyDown={onRowKeyDown}>
+                    onKeyDown={onRowKeyDown}
+                    data-test-row-name={page.name} data-test-row-location={location?.label || location}
+                >
                     {cols}
                 </Tr>);
         }
@@ -702,11 +710,12 @@ export const PageTable = ({ emptyCaption, aria_label, pages, crossrefs, sorted, 
     }
 
     return (
-        <div>
+        <>
             { narrow
                 ? rows
                 : <Table aria-label={aria_label}
-                       variant="compact">
+                      className="page-table"
+                      variant="compact">
                     { pages &&
                     <Thead>
                         <Tr>
@@ -725,7 +734,7 @@ export const PageTable = ({ emptyCaption, aria_label, pages, crossrefs, sorted, 
                 </Table>
             }
             {show_all_button}
-        </div>);
+        </>);
 };
 
 export const ChildrenTable = ({ emptyCaption, aria_label, page, show_icons }) => {
@@ -795,7 +804,7 @@ const StorageBreadcrumb = ({ page }) => {
 
 export const StorageCard = ({ card, alert, alerts, actions, children }) => {
     return (
-        <Card data-test-card-title={card.title}>
+        <Card isPlain={card.page_location && card.page_location.length == 0} data-test-card-title={card.title}>
             { (client.in_anaconda_mode() && card.page.parent && !card.next) &&
             <CardBody>
                 <StorageBreadcrumb page={card.page} />
@@ -838,13 +847,13 @@ export const StoragePage = ({ location, plot_state }) => {
     const page = get_page_from_location(location);
 
     return (
-        <Page id="storage">
+        <Page id="storage" className={"no-masthead-sidebar" + (client.in_anaconda_mode() ? " storage-anaconda" : "")}>
             { (!client.in_anaconda_mode() && page.parent) &&
-            <PageBreadcrumb stickyOnBreakpoint={{ default: "top" }}>
+            <PageBreadcrumb hasBodyWrapper={false} stickyOnBreakpoint={{ default: "top" }}>
                 <StorageBreadcrumb page={page} />
             </PageBreadcrumb>
             }
-            <PageSection isFilled={false} padding={client.in_anaconda_mode() ? { default: "noPadding" } : {}}>
+            <PageSection hasBodyWrapper={false} isFilled={false} padding={client.in_anaconda_mode() ? { default: "noPadding" } : {}}>
                 <Stack hasGutter>
                     <MultipathAlert client={client} />
                     <PageCardStackItems page={page} plot_state={plot_state} noarrow />

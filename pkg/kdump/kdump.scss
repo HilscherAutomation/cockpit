@@ -19,16 +19,25 @@
 
 @use "page";
 
-@import "global-variables";
-@import "@patternfly/patternfly/utilities/Text/text.scss";
-@import "@patternfly/patternfly/utilities/Spacing/spacing.scss";
+@use "global-variables" as *;
+@use "@patternfly/patternfly/utilities/Text/text.scss";
+@use "@patternfly/patternfly/utilities/Spacing/spacing.scss";
 
 #kdump-settings-location {
   inline-size: 100%;
 }
 
 // error details
-#kdump-settings-dialog .pf-v5-c-code-block__pre {
+#kdump-settings-dialog .pf-v6-c-code-block__pre {
   max-block-size: 200px;
   overflow-y: auto;
+}
+
+// use same spacing as spacing between card title and switch
+.pf-v6-c-switch {
+  --pf-v6-c-switch--ColumnGap: var(--pf-t--global--spacer--md);
+}
+
+.subtle-helper-text .pf-v6-c-helper-text__item-text {
+  color: var(--pf-t--global--text--color--subtle);
 }

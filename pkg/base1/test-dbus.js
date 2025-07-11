@@ -1,5 +1,5 @@
 import cockpit from "cockpit";
-import QUnit, { mock_info, skipWithPybridge } from "qunit-tests";
+import QUnit, { skipWithPybridge } from "qunit-tests";
 
 import { common_dbus_tests, dbus_track_tests } from "./test-dbus-common.js";
 
@@ -524,6 +524,20 @@ Empty=
     assert.rejects(proxy.GetString("SomeSection", "UnknownKey"),
                    /key.*UnknownKey.*not exist/,
                    "unknown key raises an error");
+
+    // empty config
+    await cockpit.file(configDir + "/cockpit/cockpit.conf").replace("");
+    await proxy.Reload();
+    assert.rejects(proxy.GetString("SomeSection", "SomeA"),
+                   /key.*SomeSection.*not exist/,
+                   "query in empty config raises an error");
+
+    // broken config (missing section header)
+    await cockpit.file(configDir + "/cockpit/cockpit.conf").replace("SomeA = two");
+    await proxy.Reload();
+    assert.rejects(proxy.GetString("SomeSection", "SomeA"),
+                   /key.*SomeSection.*not exist/,
+                   "query in broken config raises an error");
 });
 
 QUnit.test("nonexisting address", async assert => {
@@ -533,15 +547,9 @@ QUnit.test("nonexisting address", async assert => {
         await dbus.call("/org/freedesktop/DBus", "org.freedesktop.DBus", "Hello", []);
         assert.ok(false, "should not be reached");
     } catch (ex) {
-        if (await mock_info("pybridge")) {
-            assert.equal(ex.problem, "protocol-error", "got right close code");
-            assert.equal(ex.message, "failed to connect to none bus: [Errno 2] sd_bus_start: No such file or directory",
-                         "error message");
-        } else {
-            // C bridge has a weird error code
-            assert.equal(ex.problem, "internal-error", "got right close code");
-            assert.equal(ex.message, "Could not connect: No such file or directory", "error message");
-        }
+        assert.equal(ex.problem, "protocol-error", "got right close code");
+        assert.equal(ex.message, "failed to connect to none bus: [Errno 2] sd_bus_start: No such file or directory",
+                     "error message");
     }
 });
 

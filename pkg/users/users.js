@@ -16,7 +16,7 @@
  * You should have received a copy of the GNU Lesser General Public License
  * along with Cockpit; If not, see <https://www.gnu.org/licenses/>.
  */
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
 import 'polyfills'; // once per application
 import 'cockpit-dark-theme'; // once per page
 
@@ -27,6 +27,7 @@ import { debounce } from 'throttle-debounce';
 
 import cockpit from 'cockpit';
 import { superuser } from "superuser";
+import { getLastlog2 } from "logins";
 import { usePageLocation, useLoggedInUser, useFile, useInit } from "hooks.js";
 import { etc_passwd_syntax, etc_group_syntax, etc_shells_syntax } from "pam_user_parser.js";
 import { EmptyStatePanel } from "cockpit-components-empty-state.jsx";
@@ -35,6 +36,7 @@ import { AccountsMain } from "./accounts-list.js";
 import { AccountDetails } from "./account-details.js";
 
 import "./users.scss";
+import { fsinfo } from 'cockpit/fsinfo';
 
 superuser.reload_page_on_change();
 
@@ -90,7 +92,14 @@ function AccountsPage() {
         const handleShadow = cockpit.file("/etc/shadow", { superuser: "try" });
         handleShadow.watch(() => debouncedGetLoginDetails(), { read: false });
 
-        const handleLogindef = cockpit.file("/etc/login.defs");
+        let handleLogindef;
+        try {
+            await fsinfo("/etc/login.defs", []);
+            handleLogindef = cockpit.file("/etc/login.defs");
+        } catch (ex) {
+            handleLogindef = cockpit.file("/usr/etc/login.defs");
+        }
+
         handleLogindef.watch((logindef) => {
             if (logindef === null)
                 return;
@@ -207,43 +216,42 @@ async function getLoginDetails(logind_client) {
                         details[name] = { ...details[name], isLocked: hash.startsWith("!") };
                 }
             } catch (err) {
-                console.warn("Unexpected error when getting locked accounts from /etc/shadow:", err);
+                console.warn("Unexpected error when getting locked accounts from /etc/shadow:", err.toString());
             }
         } else {
-            console.warn("Unexpected error when getting locked account information", err);
+            console.warn("Unexpected error when getting locked account information:", err.toString());
         }
     }
 
     // last logged in
 
-    let LastLogPath;
     try {
-        await cockpit.spawn(["test", "-e", "/var/lib/lastlog/lastlog2.db"], { err: "ignore" });
-        LastLogPath = "lastlog2";
-    } catch (err1) {
-        LastLogPath = "lastlog";
-    }
+        // merge lastlog2 into details
+        for (const [name, last] of Object.entries(await getLastlog2()))
+            details[name] = { ...details[name], lastLogin: last.time * 1000 };
+    } catch (err) {
+        // fall back to legacy lastlog
+        try {
+            const out = await cockpit.spawn(["lastlog"], { environ: ["LC_ALL=C"] });
+            await Promise.all(out.split('\n').slice(1, -1).map(async line => {
+                if (line.includes('**Never logged in**'))
+                    return;
 
-    try {
-        const out = await cockpit.spawn([LastLogPath], { environ: ["LC_ALL=C"] });
-        await Promise.all(out.split('\n').slice(1, -1).map(async line => {
-            if (line.includes('**Never logged in**'))
-                return;
-
-            const splitLine = line.trim().split(/[ \t]+/);
-            const name = splitLine[0];
-            const date_fields = splitLine.slice(-5);
-            // this is impossible to parse with Date() (e.g. Firefox does not work with all time zones), so call `date` to parse it
-            try {
-                const out = await cockpit.spawn(["date", "+%s", "-d", date_fields.join(' ')],
-                                                { environ: ["LC_ALL=C"], err: "out" });
-                details[name] = { ...details[name], lastLogin: parseInt(out) * 1000 };
-            } catch (e) {
-                console.warn(`Failed to parse date from lastlog line '${line}': ${e.toString()}`);
-            }
-        }));
-    } catch (ex) {
-        console.warn(`Failed to run ${LastLogPath}: ${ex.toString()}`);
+                const splitLine = line.trim().split(/[ \t]+/);
+                const name = splitLine[0];
+                const date_fields = splitLine.slice(-5);
+                // this is impossible to parse with Date() (e.g. Firefox does not work with all time zones), so call `date` to parse it
+                try {
+                    const out = await cockpit.spawn(["date", "+%s", "-d", date_fields.join(' ')],
+                                                    { environ: ["LC_ALL=C"], err: "out" });
+                    details[name] = { ...details[name], lastLogin: parseInt(out) * 1000 };
+                } catch (e) {
+                    console.warn(`Failed to parse date from lastlog line '${line}': ${e.toString()}`);
+                }
+            }));
+        } catch (ex) {
+            console.warn(`Failed to run lastlog: ${ex.toString()}`);
+        }
     }
 
     return details;

@@ -83,7 +83,6 @@ __all__ = (
     'test_main',
     'timeout',
     'todo',
-    'todoPybridgeRHEL8',
     'wait',
 )
 
@@ -109,6 +108,11 @@ WEBDRIVER_KEYS = {
     "Control": "\uE009",
     "Alt": "\uE00A",
     "Escape": "\uE00C",
+    "Space": "\uE00D",
+    "PageUp": "\uE00E",
+    "PageDown": "\uE00F",
+    "End": "\uE010",
+    "Home": "\uE011",
     "ArrowLeft": "\uE012",
     "ArrowUp": "\uE013",
     "ArrowRight": "\uE014",
@@ -116,6 +120,7 @@ WEBDRIVER_KEYS = {
     "Insert": "\uE016",
     "Delete": "\uE017",
     "Meta": "\uE03D",
+    "F2": "\uE032",
 }
 
 
@@ -241,6 +246,12 @@ class Browser:
         self.coverage_label = coverage_label
         self.machine = machine
 
+        # HACK: Tests which don't yet get along with real mouse clicks in Chromium
+        # can opt into falling back to the old MouseEvent emulation; this is cheating, but fixing
+        # all the tests at once is too much work. Remove this once all tests in all our projects
+        # got fixed.
+        self.chromium_fake_mouse = False
+
         headless = os.environ.get("TEST_SHOW_BROWSER", '0') == '0'
         self.browser = os.environ.get("TEST_BROWSER", "chromium")
         if self.browser == "chromium":
@@ -293,7 +304,22 @@ class Browser:
         except FileNotFoundError:
             self.layouts = default_layouts
         self.current_layout = None
-        self.valid = True
+
+    def _is_running(self) -> bool:
+        """True initially, false after calling .kill()"""
+
+        return self.driver is not None and self.driver.bidi_session is not None
+
+    def have_test_api(self) -> bool:
+        """Check if the browser is running and has a Cockpit page
+
+        I.e. are our test-functions.js available? This is only true after
+        opening cockpit, not for the initial blank page (before login_and_go)
+        or other URLs like Grafana.
+        """
+        if not self._is_running():
+            return False
+        return self.eval_js("!!window.ph_find")
 
     def run_async(self, coro: Coroutine[Any, Any, Any]) -> JsonObject:
         """Run coro in main loop in our BiDi thread
@@ -308,12 +334,11 @@ class Browser:
         loop.run_forever()
 
     def kill(self) -> None:
-        if not self.valid:
+        if not self._is_running():
             return
         self.run_async(self.driver.close())
         self.loop.call_soon_threadsafe(self.loop.stop)
         self.bidi_thread.join()
-        self.valid = False
 
     def bidi(self, method: str, **params: Any) -> webdriver_bidi.JsonObject:
         """Send a Webdriver BiDi command and return the JSON response"""
@@ -328,7 +353,10 @@ class Browser:
 
         if self.browser == "chromium":
             assert isinstance(self.driver, webdriver_bidi.ChromiumBidi)
-            return self.run_async(self.driver.cdp(method, **params))
+            reply = self.run_async(self.driver.cdp(method, **params))
+            if 'error' in reply:
+                raise Error(str(reply['error'])) from None
+            return reply['result']
         else:
             raise webdriver_bidi.WebdriverError("CDP is only supported in Chromium")
 
@@ -416,7 +444,8 @@ class Browser:
         """Allow browser downloads"""
         # this is only necessary for headless chromium
         if self.browser == "chromium":
-            self.cdp_command("Browser.setDownloadBehavior", behavior="allow", downloadPath=str(self.driver.download_dir))
+            self.cdp_command("Browser.setDownloadBehavior", behavior="allow",
+                             downloadPath=str(self.driver.download_dir))
 
     def upload_files(self, selector: str, files: Sequence[str]) -> None:
         """Upload a local file to the browser
@@ -482,45 +511,40 @@ class Browser:
         self,
         selector: str,
         event: str,
-        x: int = 0,
-        y: int = 0,
+        x: int | None = None,
+        y: int | None = None,
         btn: int = 0,
         *,
         ctrlKey: bool = False,
         shiftKey: bool = False,
         altKey: bool = False,
-        metaKey: bool = False
+        metaKey: bool = False,
+        scrollVisible: bool = True,
     ) -> None:
-        """Simulate a browser mouse event
+        """Do a mouse event in the browser.
 
         :param selector: the element to interact with
-        :param type: the mouse event to simulate, for example mouseenter, mouseleave, mousemove, click
-        :param x: the x coordinate
-        :param y: the y coordinate
+        :param type: click, dblclick, mousemove; you can also use "mouseenter" (alias for mousemove) or "mouseleave"
+               (but this is just a heuristic by moving the mouse 500x500 pixels away; prefer moving to an explicit
+               target)
+        :param x, y: coordinates; when not given, default to center of element
         :param btn: mouse button to click https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/buttons
         :param crtlKey: press the ctrl key
         :param shiftKey: press the shift key
         :param altKey: press the alt key
         :param metaKey: press the meta key
+        :param scrollVisible: set to False in rare cases where scrolling an element into view triggers side effects
         """
         self.wait_visible(selector)
 
-        # HACK: Chromium clicks don't work with iframes; use our old "synthesize MouseEvent" approach
-        # https://issues.chromium.org/issues/359616812
         # TODO: x and y are not currently implemented: webdriver (0, 0) is the element's center, not top left corner
-        if self.browser == "chromium" or x != 0 or y != 0:
-            self.call_js_func('ph_mouse', selector, event, x, y, btn, ctrlKey, shiftKey, altKey, metaKey)
+        if x is not None or y is not None or (self.browser == "chromium" and self.chromium_fake_mouse):
+            self.call_js_func('ph_mouse', selector, event, x or 0, y or 0, btn, ctrlKey, shiftKey, altKey, metaKey)
             return
 
-        # For Firefox and regular clicks, use the BiDi API, which is more realistic -- it doesn't
+        # For Firefox and top frame with Chromium, use the BiDi API, which is more realistic -- it doesn't
         # sidestep the browser
-        element = self.call_js_func('ph_find_scroll_into_view', selector)
-
-        # btn=2 for context menus doesn't work with ph_mouse(); so translate the old ph_mouse() API
-        if event == "contextmenu":
-            assert btn == 0, "contextmenu event can only be done with default 'btn' value"
-            btn = 2
-            event = "click"
+        element = self.call_js_func('ph_find_scroll_into_view' if scrollVisible else 'ph_find', selector)
 
         actions = [{"type": "pointerMove", "x": 0, "y": 0, "origin": {"type": "element", "element": element}}]
         down = {"type": "pointerDown", "button": btn}
@@ -529,10 +553,11 @@ class Browser:
             actions.extend([down, up])
         elif event == "dblclick":
             actions.extend([down, up, down, up])
-        elif event == "mouseenter":
-            actions.insert(0, {"type": "pointerMove", "x": 0, "y": 0, "origin": "viewport"})
+        elif event in ["mousemove", "mouseenter"]:
+            pass
         elif event == "mouseleave":
-            actions.append({"type": "pointerMove", "x": 0, "y": 0, "origin": "viewport"})
+            # move the mouse someplace else
+            actions = [{"type": "pointerMove", "x": 500, "y": 500, "origin": "pointer"}]
         else:
             raise NotImplementedError(f"unknown event {event}")
 
@@ -701,7 +726,7 @@ class Browser:
         self.set_val(selector, value)
         self.wait_val(selector, value)
 
-    def select_PF(self, selector: str, value: str, menu_class: str = ".pf-v5-c-menu") -> None:
+    def select_PF(self, selector: str, value: str, menu_class: str = ".pf-v6-c-menu") -> None:
         """For a PatternFly Select-like component
 
         For things like <Select> or <TimePicker>. Unfortunately none of them render as an actual <select>, but a
@@ -714,10 +739,9 @@ class Browser:
         self.click(f"{menu_class} button:contains('{value}')")
         self.wait_not_present(menu_class)
 
-    def select_PF_deprecated(self, selector: str, value: str) -> None:
-        """For the deprecated PatternFly Select component"""
-
-        self.select_PF(selector, value, menu_class=".pf-v5-c-select__menu")
+    def click_button(self, compid: str, prefix: str = "", component: str = "PF6/Button") -> None:
+        """Click on a button identified by its OUIA component id."""
+        self.click(f'{prefix} [data-ouia-component-type="{component}"][data-ouia-component-id="{compid}"]')
 
     def set_input_text(
         self, selector: str, val: str, append: bool = False, value_check: bool = True, blur: bool = True
@@ -736,10 +760,12 @@ class Browser:
             self.wait_val(selector, val)
 
     def set_file_autocomplete_val(self, group_identifier: str, location: str) -> None:
-        self.set_input_text(f"{group_identifier} .pf-v5-c-select__toggle-typeahead input", location)
-        # click away the selection list, to force a state update
-        self.click(f"{group_identifier} .pf-v5-c-select__toggle-typeahead")
-        self.wait_not_present(f"{group_identifier} .pf-v5-c-select__menu")
+        self.set_input_text(f"{group_identifier} .pf-v6-c-menu-toggle input", location)
+        # select the file
+        self.wait_text(".pf-v6-c-menu ul li:nth-child(1) button", location)
+        self.click(".pf-v6-c-menu ul li:nth-child(1) button")
+        self.wait_not_present(".pf-v6-c-menu")
+        self.wait_val(f"{group_identifier} .pf-v6-c-menu-toggle input", location)
 
     @contextlib.contextmanager
     def wait_timeout(self, timeout: int) -> Iterator[None]:
@@ -769,7 +795,8 @@ class Browser:
                 duration = time.time() - start
                 percent = int(duration / timeout * 100)
                 if percent >= 50:
-                    print(f"WARNING: Waiting for {cond} took {duration:.1f} seconds, which is {percent}% of the timeout.")
+                    print(f"WARNING: Waiting for {cond} took {duration:.1f} seconds, "
+                          f"which is {percent}% of the timeout.")
                 return
             except Error as e:
                 last_error = e
@@ -783,6 +810,8 @@ class Browser:
                     "Cannot find context",
                     # firefox
                     "MessageHandlerFrame' destroyed",
+                    # page helpers not yet loaded
+                    "ph_wait_cond is not defined",
                    ]):
                     if time.time() - start < timeout:
                         webdriver_bidi.log_command.info("wait_js_cond: Ignoring/retrying %r", e)
@@ -904,10 +933,15 @@ class Browser:
 
         self.switch_to_top()
 
+        def wait_no_curtain() -> None:
+            # Older shells make the curtain invisible, newer shells
+            # remove it entirely. Let's cater to both.
+            self.wait_js_cond('!ph_is_present(".curtains-ct") || !ph_is_visible(".curtains-ct")')
+
         while True:
             try:
                 self._wait_present("iframe.container-frame[name='%s'][data-loaded]" % frame)
-                self.wait_not_visible(".curtains-ct")
+                wait_no_curtain()
                 self.wait_visible("iframe.container-frame[name='%s']" % frame)
                 break
             except Error as ex:
@@ -915,7 +949,7 @@ class Browser:
                     reconnect = False
                     if self.is_present("#machine-reconnect"):
                         self.click("#machine-reconnect")
-                        self.wait_not_visible(".curtains-ct")
+                        wait_no_curtain()
                         continue
                 raise
 
@@ -1013,9 +1047,11 @@ class Browser:
             # happens when cockpit is still running
             self.open_session_menu()
             try:
-                self.click('#logout')
+                # HACK: scrolling into view sometimes triggers TopNav's handleClickOutside() hack
+                # we don't need it here, if the session menu is visible then so is the dropdown
+                self.mouse('#logout', "click", scrollVisible=False)
             except RuntimeError as e:
-                # logging out does destroy the current frame context, it races with the CDP driver finishing the command
+                # logging out does destroy the current frame context, it races with the driver finishing the command
                 if "Execution context was destroyed" not in str(e):
                     raise
         self.wait_visible('#login')
@@ -1033,7 +1069,7 @@ class Browser:
     ) -> None:
         self.logout()
         if wait_remote_session_machine:
-            wait_remote_session_machine.execute("while pgrep -a cockpit-ssh; do sleep 1; done")
+            wait_remote_session_machine.execute("while pgrep -af '[c]ockpit.beiboot'; do sleep 1; done")
         self.try_login(user=user, password=password, superuser=superuser)
         self.wait_visible('#content')
         if path:
@@ -1047,6 +1083,8 @@ class Browser:
         self.wait_visible("#toggle-menu")
         if (self.attr("#toggle-menu", "aria-expanded") != "true"):
             self.click("#toggle-menu")
+            # Replace with "#toggle-menu-menu" when all our images have Cockpit > 317
+            self.wait_visible("button.display-language-menu")
 
     def layout_is_mobile(self) -> bool:
         if not self.current_layout:
@@ -1084,9 +1122,9 @@ class Browser:
 
             if passwordless:
                 self.wait_in_text("div[role=dialog]", "Administrative access")
-                self.wait_in_text("div[role=dialog] .pf-v5-c-modal-box__body", "You now have administrative access.")
+                self.wait_in_text("div[role=dialog] .pf-v6-c-modal-box__body", "You now have administrative access.")
                 # there should be only one ("Close") button
-                self.click("div[role=dialog] .pf-v5-c-modal-box__footer button")
+                self.click("div[role=dialog] .pf-v6-c-modal-box__footer button")
             else:
                 self.wait_in_text("div[role=dialog]", "Switch to administrative access")
                 self.wait_in_text("div[role=dialog]", f"Password for {user}:")
@@ -1120,7 +1158,7 @@ class Browser:
 
     def get_pf_progress_value(self, progress_bar_sel: str) -> int:
         """Get numeric value of a PatternFly <ProgressBar> component"""
-        sel = progress_bar_sel + " .pf-v5-c-progress__indicator"
+        sel = progress_bar_sel + " .pf-v6-c-progress__indicator"
         self.wait_visible(sel)
         self.wait_attr_contains(sel, "style", "width:")
         style = self.attr(sel, "style")
@@ -1134,13 +1172,23 @@ class Browser:
         known_host: bool = False,
         password: str | None = None,
         expect_closed_dialog: bool = True,
+        expect_warning: bool = True,
+        expect_curtain: bool = True
     ) -> None:
-        self.click('#machine-troubleshoot')
+        if expect_curtain:
+            self.click('#machine-troubleshoot')
+
+        if not new and expect_warning:
+            self.wait_visible('#hosts_connect_server_dialog')
+            self.click("#hosts_connect_server_dialog button.pf-m-warning")
 
         self.wait_visible('#hosts_setup_server_dialog')
         if new:
             self.wait_text("#hosts_setup_server_dialog button.pf-m-primary", "Add")
             self.click("#hosts_setup_server_dialog button.pf-m-primary")
+            if expect_warning:
+                self.wait_visible('#hosts_connect_server_dialog')
+                self.click("#hosts_connect_server_dialog button.pf-m-warning")
             if not known_host:
                 self.wait_in_text('#hosts_setup_server_dialog', "You are connecting to")
                 self.wait_in_text('#hosts_setup_server_dialog', "for the first time.")
@@ -1154,10 +1202,14 @@ class Browser:
         if expect_closed_dialog:
             self.wait_not_present('#hosts_setup_server_dialog')
 
-    def add_machine(self, address: str, known_host: bool = False, password: str = "foobar") -> None:
+    def add_machine(self, address: str, known_host: bool = False, password: str | None = "foobar",
+                    expect_warning: bool = True) -> None:
         self.switch_to_top()
         self.go(f"/@{address}")
-        self.start_machine_troubleshoot(new=True, known_host=known_host, password=password)
+        self.start_machine_troubleshoot(new=True,
+                                        known_host=known_host,
+                                        password=password,
+                                        expect_warning=expect_warning)
         self.enter_page("/system", host=address)
 
     def grant_permissions(self, *args: str) -> None:
@@ -1175,7 +1227,7 @@ class Browser:
         Arguments:
             title: Used for the filename.
         """
-        if self.valid:
+        if self._is_running():
             filename = unique_filename(f"{label or self.label}-{title}", "png")
             try:
                 ret = self.bidi("browsingContext.captureScreenshot", quiet=True,
@@ -1255,7 +1307,9 @@ class Browser:
         sit_after_mock: bool = False,
         scroll_into_view: str | None = None,
         wait_animations: bool = True,
-        wait_delay: float = 0.5
+        wait_delay: float = 0.5,
+        chrome_hack_double_shots: bool = False,
+        abs_tolerance: float = 20
     ) -> None:
         """Compare the given element with its reference in the current layout"""
 
@@ -1321,6 +1375,26 @@ class Browser:
         ret = self.bidi("browsingContext.captureScreenshot", quiet=True,
                         context=self.driver.top_context,
                         clip=rect)
+        if chrome_hack_double_shots:
+            # HACK - https://github.com/cockpit-project/cockpit/issues/21577
+            #
+            # There is some really evil Chromium bug that often hides the
+            # primary button in dialog screenshots.  But funnily, calling
+            # captureScreenshot a second time will give us the correct
+            # rendering, every time.
+            #
+            # This doesn't seem to be a race between the page changing and
+            # us taking screenshots. No amount of waiting here helps
+            # fully. The second call to captureScreenshot seems to indeed
+            # trigger something that renders the page again, and correctly
+            # this time.
+            #
+            ret1 = ret
+            ret = self.bidi("browsingContext.captureScreenshot", quiet=True,
+                            context=self.driver.top_context,
+                            clip=rect)
+            if ret1["data"] != ret["data"]:
+                print("WARNING: Inconsistent screenshots for", base)
         png_now = base64.standard_b64decode(ret["data"])
         png_ref = os.path.exists(ref_filename) and open(ref_filename, "rb").read()
         if not png_ref:
@@ -1356,7 +1430,7 @@ class Browser:
             # Pixels that are different but have been ignored are
             # marked in the delta image in green.
 
-            def masked(ref: tuple[int, int, int, int]) -> bool:
+            def masked(ref: tuple[int, ...]) -> bool:
                 return ref[3] != 255
 
             def ignorable_coord(x: int, y: int) -> bool:
@@ -1365,16 +1439,19 @@ class Browser:
                         return True
                 return False
 
-            def ignorable_change(a: tuple[int, int, int], b: tuple[int, int, int]) -> bool:
+            def ignorable_change(a: tuple[int, ...], b: tuple[int, ...]) -> bool:
                 return abs(a[0] - b[0]) <= 2 and abs(a[1] - b[1]) <= 2 and abs(a[2] - b[2]) <= 2
 
             def img_eq(ref: Image.Image, now: Image.Image, delta: Image.Image) -> bool:
                 # This is slow but exactly what we want.
                 # ImageMath might be able to speed this up.
                 # no-untyped-call: see https://github.com/python-pillow/Pillow/issues/8029
-                data_ref = ref.load()  # type: ignore[no-untyped-call]
-                data_now = now.load()  # type: ignore[no-untyped-call]
-                data_delta = delta.load()  # type: ignore[no-untyped-call]
+                data_ref = ref.load()
+                data_now = now.load()
+                data_delta = delta.load()
+                assert data_ref
+                assert data_now
+                assert data_delta
                 result = True
                 count = 0
                 width, height = delta.size
@@ -1382,16 +1459,28 @@ class Browser:
                     for x in range(width):
                         if x >= ref.size[0] or x >= now.size[0] or y >= ref.size[1] or y >= now.size[1]:
                             result = False
-                        elif data_ref[x, y] != data_now[x, y]:
-                            if masked(data_ref[x, y]) or ignorable_coord(x, y) or ignorable_change(data_ref[x, y], data_now[x, y]):
-                                data_delta[x, y] = (0, 255, 0, 255)
-                            else:
-                                data_delta[x, y] = (255, 0, 0, 255)
-                                count += 1
-                                if count > 20:
-                                    result = False
                         else:
-                            data_delta[x, y] = data_ref[x, y]
+                            # we only support RGBA
+                            ref_pixel = data_ref[x, y]
+                            now_pixel = data_now[x, y]
+                            # we only support RGBA, not single-channel float (grayscale)
+                            assert isinstance(ref_pixel, tuple)
+                            assert isinstance(now_pixel, tuple)
+
+                            if ref_pixel != now_pixel:
+                                if (
+                                        masked(ref_pixel) or
+                                        ignorable_coord(x, y) or
+                                        ignorable_change(ref_pixel, now_pixel)
+                                ):
+                                    data_delta[x, y] = (0, 255, 0, 255)
+                                else:
+                                    data_delta[x, y] = (255, 0, 0, 255)
+                                    count += 1
+                                    if count > abs_tolerance:
+                                        result = False
+                            else:
+                                data_delta[x, y] = ref_pixel
                 return result
 
             if not img_eq(img_ref, img_now, img_delta):
@@ -1399,7 +1488,7 @@ class Browser:
                     # Preserve alpha channel so that the 'now'
                     # image can be used as the new reference image
                     # without further changes
-                    img_now.putalpha(img_ref.getchannel("A"))  # type: ignore[no-untyped-call]
+                    img_now.putalpha(img_ref.getchannel("A"))
                 img_now.save(filename)
                 attach(filename, move=True)
                 ref_filename_for_attach = base + "-reference.png"
@@ -1423,7 +1512,10 @@ class Browser:
         scroll_into_view: str | None = None,
         wait_animations: bool = True,
         wait_after_layout_change: bool = False,
-        wait_delay: float = 0.5
+        wait_delay: float = 0.5,
+        layout_change_hook: Callable[[], None] | None = None,
+        chrome_hack_double_shots: bool = False,
+        abs_tolerance: float = 20
     ) -> None:
         """Compare the given element with its reference in all layouts"""
 
@@ -1436,9 +1528,16 @@ class Browser:
         # If the page overflows make sure to not show a scrollbar
         # Don't apply this hack for login and terminal and shell as they don't use PF Page
         if not self.is_present("#shell-page") and not self.is_present("#login-details") and not self.is_present("#system-terminal-page"):
-            classes = self.attr("main", "class")
-            if "pf-v5-c-page__main" in classes:
-                self.set_attr("main.pf-v5-c-page__main", "class", f"{classes} pixel-test")
+            classes = self.attr("body", "class")
+            self.set_attr("body", "class", f"{classes} pixel-test")
+
+        # move the mouse to a harmless place where it doesn't accidentally focus anything (as that changes UI)
+        self.bidi("input.performActions", context=self.driver.context, actions=[{
+            "id": "move-away",
+            "type": "pointer",
+            "parameters": {"pointerType": "mouse"},
+            "actions": [{"type": "pointerMove", "x": 2000, "y": 0, "origin": "viewport"}]
+        }])
 
         if self.current_layout:
             previous_layout = self.current_layout["name"]
@@ -1447,11 +1546,15 @@ class Browser:
                     self.set_layout(layout["name"])
                     if wait_after_layout_change:
                         time.sleep(wait_delay)
+                    if layout_change_hook:
+                        layout_change_hook()
                     self.assert_pixels_in_current_layout(selector, key, ignore=ignore,
                                                          mock=mock, sit_after_mock=sit_after_mock,
                                                          scroll_into_view=scroll_into_view,
                                                          wait_animations=wait_animations,
-                                                         wait_delay=wait_delay)
+                                                         wait_delay=wait_delay,
+                                                         chrome_hack_double_shots=chrome_hack_double_shots,
+                                                         abs_tolerance=abs_tolerance)
 
             self.set_layout(previous_layout)
 
@@ -1470,7 +1573,7 @@ class Browser:
     def get_js_log(self) -> Sequence[str]:
         """Return the current javascript log"""
 
-        if self.valid:
+        if self._is_running():
             return [str(log) for log in self.driver.logs]
         return []
 
@@ -1486,15 +1589,15 @@ class Browser:
             print("Wrote JS log to " + filename)
 
     def write_coverage_data(self) -> None:
-        if self.coverage_label and self.valid:
-            coverage = self.cdp_command("Profiler.takePreciseCoverage")["result"]
+        if self.coverage_label and self._is_running():
+            coverage = self.cdp_command("Profiler.takePreciseCoverage")
             write_lcov(coverage['result'], self.coverage_label)
 
     def assert_no_oops(self) -> None:
         if self.allow_oops:
             return
 
-        if self.valid:
+        if self.have_test_api():
             self.switch_to_top()
             if self.eval_js("!!document.getElementById('navbar-oops')"):
                 assert not self.is_visible("#navbar-oops"), "Cockpit shows an Oops"
@@ -1552,7 +1655,8 @@ class MachineCase(unittest.TestCase):
         if opts.address:
             if forward:
                 raise unittest.SkipTest("Cannot run this test when specific machine address is specified")
-            machine = testvm.Machine(address=opts.address, image=image or self.image, verbose=opts.trace, browser=opts.browser)
+            machine = testvm.Machine(address=opts.address, image=image or self.image,
+                                     verbose=opts.trace, browser=opts.browser)
             if cleanup:
                 self.addCleanup(machine.disconnect)
         else:
@@ -1567,7 +1671,7 @@ class MachineCase(unittest.TestCase):
                 self.network = network
             networking = self.network.host(restrict=restrict, forward=forward or {})
             machine = machine_class(verbose=opts.trace, networking=networking, image=image, **kwargs)
-            image_file = machine.image_file  # type: ignore[attr-defined]
+            image_file = machine.image_file
             if opts.fetch and not os.path.exists(image_file):
                 machine.pull(image_file)
             if cleanup:
@@ -1648,7 +1752,7 @@ class MachineCase(unittest.TestCase):
 
         return int(v[0]) < version
 
-    def setUp(self, restrict: bool = True) -> None:
+    def setUp(self) -> None:
         self.allowed_messages = self.default_allowed_messages
         self.allowed_console_errors = self.default_allowed_console_errors
         self.allow_core_dumps = False
@@ -1688,14 +1792,9 @@ class MachineCase(unittest.TestCase):
             # First create all machines, wait for them later
             for key in sorted(provision.keys()):
                 options = dict(provision[key])
-                if 'address' in options:
-                    del options['address']
-                if 'dns' in options:
-                    del options['dns']
-                if 'dhcp' in options:
-                    del options['dhcp']
-                if 'restrict' not in options:
-                    options['restrict'] = restrict
+                options.pop('address', None)
+                options.pop('dns', None)
+                options.pop('dhcp', None)
                 machine = self.new_machine(**options)
                 self.machines[key] = machine
                 if first_machine:
@@ -1756,8 +1855,7 @@ class MachineCase(unittest.TestCase):
 
         # only enabled by default on released OSes; see pkg/shell/manifest.json
         self.multihost_enabled = image.startswith(("rhel-9", "centos-9")) or image in [
-                "ubuntu-2204", "ubuntu-2404", "debian-stable",
-                "fedora-39", "fedora-40", "fedora-coreos"]
+                "ubuntu-2204", "ubuntu-2404", "debian-stable"]
         # Transitional code while we move ubuntu-stable from 24.04 to 24.10
         if image == "ubuntu-stable" and m.execute(". /etc/os-release; echo $VERSION_ID").strip() == "24.04":
             self.multihost_enabled = True
@@ -1814,8 +1912,9 @@ class MachineCase(unittest.TestCase):
             self.restore_file("/etc/fstab")
             self.restore_file("/etc/crypttab")
 
-            # tests expect cockpit.service to not run at start; also, avoid log leakage into the next test
-            self.addCleanup(m.execute, "systemctl stop --quiet cockpit")
+            if not m.ws_container:
+                # tests expect cockpit.service to not run at start; also, avoid log leakage into the next test
+                self.addCleanup(m.execute, "systemctl stop --quiet cockpit")
 
         # The sssd daemon seems to get confused when we restore
         # backups of /etc/group etc and stops following updates to it.
@@ -1913,6 +2012,8 @@ class MachineCase(unittest.TestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def enable_multihost(self, machine: testvm.Machine) -> None:
+        if isBeibootLogin():
+            raise NotImplementedError("multi-host config change not currently implemented for beiboot scenario")
         if not self.multihost_enabled:
             machine.write("/etc/cockpit/cockpit.conf",
                           '[WebService]\nAllowMultiHost=yes\n')
@@ -2016,6 +2117,9 @@ class MachineCase(unittest.TestCase):
         "(direct|pcp-archive): instance name lookup failed:.*",
         "(direct|pcp-archive): couldn't create pcp archive context for.*",
 
+        # PCP Python bridge
+        "cockpit.channels.pcp-ERROR: no such metric: .*",
+
         # timedatex.service shuts down after timeout, runs into race condition with property watching
         ".*org.freedesktop.timedate1: couldn't get all properties.*Error:org.freedesktop.DBus.Error.NoReply.*",
     ]
@@ -2110,8 +2214,6 @@ class MachineCase(unittest.TestCase):
             "_COMM=cockpit-ws",
             "GLIB_DOMAIN=cockpit-ws",
             "GLIB_DOMAIN=cockpit-bridge",
-            "GLIB_DOMAIN=cockpit-ssh",
-            "GLIB_DOMAIN=cockpit-pcp"
         ]
 
         if not self.allow_core_dumps:
@@ -2295,7 +2397,7 @@ class MachineCase(unittest.TestCase):
         If the directory needs to survive reboot, `reboot_safe=True` needs to be specified; then this
         will just backup/restore the directory instead of bind-mounting, which is less robust.
         """
-        if not self.is_nondestructive() and not self.machine.ostree_image:
+        if not self.is_nondestructive():
             return  # skip for efficiency reasons
 
         exe = self.machine.execute
@@ -2382,10 +2484,23 @@ class MachineCase(unittest.TestCase):
         By default root login is disabled in cockpit, removing the root entry of /etc/cockpit/disallowed-users allows root to login.
         """
 
-        # fedora-coreos runs cockpit-ws in a containter so does not install cockpit-ws on the host
         disallowed_conf = '/etc/cockpit/disallowed-users'
-        if not self.machine.ostree_image and self.file_exists(disallowed_conf):
+        if not self.machine.ws_container and self.file_exists(disallowed_conf):
             self.sed_file('/root/d', disallowed_conf)
+
+    def reboot(self, timeout_sec: int | None = None) -> None:
+        self.allow_restart_journal_messages()
+        if timeout_sec is None:
+            self.machine.reboot()
+        else:
+            self.machine.reboot(timeout_sec=timeout_sec)
+
+    def wait_reboot(self, timeout_sec: int | None = None) -> None:
+        self.allow_restart_journal_messages()
+        if timeout_sec is None:
+            self.machine.wait_reboot()
+        else:
+            self.machine.wait_reboot(timeout_sec=timeout_sec)
 
     def setup_provisioned_hosts(self, disable_preload: bool = False) -> None:
         """Setup provisioned hosts for testing
@@ -2427,13 +2542,13 @@ def jsquote(js: object) -> str:
     return json.dumps(js)
 
 
-def get_decorator(method: object, _class: object, name: str, default: Any = None) -> Any:
+def get_decorator(method: object, class_: object, name: str, default: Any = None) -> Any:
     """Get decorator value of a test method or its class
 
     Return None if the decorator was not set.
     """
     attr = "_testlib__" + name
-    return getattr(method, attr, getattr(_class, attr, default))
+    return getattr(method, attr, getattr(class_, attr, default))
 
 
 ###########################
@@ -2486,6 +2601,24 @@ def skipOstree(reason: str) -> Callable[[_FT], _FT]:
     return lambda testEntity: testEntity
 
 
+def isBeibootLogin() -> bool:
+    return "ws-container" in os.getenv("TEST_SCENARIO", "")
+
+
+def skipWsContainer(reason: str) -> Callable[[_FT], _FT]:
+    """Decorator for skipping a test with cockpit/ws"""
+    if testvm.DEFAULT_IMAGE in OSTREE_IMAGES or isBeibootLogin():
+        return unittest.skip(f"{testvm.DEFAULT_IMAGE}: {reason}")
+    return lambda testEntity: testEntity
+
+
+def skipBeiboot(reason: str) -> Callable[[_FT], _FT]:
+    """Decorator for skipping a test with cockpit/ws in beiboot mode"""
+    if isBeibootLogin():
+        return unittest.skip(f"{testvm.DEFAULT_IMAGE}: {reason}")
+    return lambda testEntity: testEntity
+
+
 def nondestructive(testEntity: _T) -> _T:
     """Tests decorated as nondestructive will all run against the same VM
 
@@ -2525,12 +2658,6 @@ def todo(reason: str = '') -> Callable[[_T], _T]:
         setattr(testEntity, '_testlib__todo', reason)
         return testEntity
     return wrapper
-
-
-def todoPybridgeRHEL8(reason: str | None = None) -> Callable[[_T], _T]:
-    # We don't currently test this scenario but we probably want to bring it
-    # back some day.  We'll implement this again when we do that.
-    return lambda testEntity: testEntity
 
 
 def timeout(seconds: int) -> Callable[[_T], _T]:
@@ -2663,11 +2790,10 @@ def arg_parser(enable_sit: bool = True) -> argparse.ArgumentParser:
 
 
 def test_main(
-     options: argparse.Namespace | None = None,
-     suite: unittest.TestSuite | None = None,
-     attachments: str | None = None,
-     **kwargs: object
-) -> int:
+     options: argparse.Namespace | None = None,  # noqa: PT028
+     suite: unittest.TestSuite | None = None,  # noqa: PT028
+     attachments: str | None = None,  # noqa: PT028
+    ) -> int:
     """
     Run all test cases, as indicated by arguments.
 
@@ -2765,8 +2891,6 @@ def wait(func: Callable[[], _T | None], msg: str | None = None, delay: int = 1, 
         except Exception:
             if t == tries - 1:
                 raise
-            else:
-                pass
         t = t + 1
         time.sleep(delay)
     raise Error(msg or "Condition did not become true.")

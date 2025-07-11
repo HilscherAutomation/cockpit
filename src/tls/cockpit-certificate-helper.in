@@ -14,17 +14,22 @@ install_cert() {
 
     # The certificate should be world-readable
     chmod a+r "${destination}"
+
+    # Force flush to disk for embedded devices
+    sync "${destination}"
 }
 
 install_key() {
     local destination="${COCKPIT_WS_CERTS_D}/$1"
     mv -Z "$1" "${destination}"
+
+    # Force flush to disk for embedded devices
+    sync "${destination}"
 }
 
 selfsign_sscg() {
     sscg --quiet \
         --lifetime "${DAYS}" \
-        --key-strength 2048 \
         --cert-key-file "${KEYFILE}" \
         --cert-file "${CERTFILE}" \
         --ca-file "${CA_FILE}" \
@@ -37,26 +42,17 @@ selfsign_sscg() {
 selfsign_openssl() {
     openssl req -x509 \
         -days "${DAYS}" \
-        -newkey rsa:2048 \
+        -newkey rsa \
         -keyout "${KEYFILE}" \
         -keyform PEM \
         -nodes \
         -out "${CERTFILE}" \
         -outform PEM \
         -subj "${MACHINE_ID:+/O=${MACHINE_ID}}/CN=${HOSTNAME}" \
-        -config - \
-        -extensions v3_req << EOF
-    [ req ]
-    req_extensions = v3_req
-    extensions = v3_req
-    distinguished_name = req_distinguished_name
-    [ req_distinguished_name ]
-    [ v3_req ]
-    subjectAltName=IP:127.0.0.1,DNS:localhost
-    basicConstraints = critical, CA:TRUE
-    keyUsage = critical, digitalSignature,cRLSign,keyCertSign,keyEncipherment,keyAgreement
-    extendedKeyUsage = serverAuth
-EOF
+        -addext "subjectAltName=IP:127.0.0.1,DNS:localhost" \
+        -addext "basicConstraints = critical,CA:TRUE" \
+        -addext "keyUsage = critical,digitalSignature,cRLSign,keyCertSign,keyEncipherment,keyAgreement" \
+        -addext "extendedKeyUsage = serverAuth"
 }
 
 cmd_selfsign() {
@@ -69,6 +65,14 @@ cmd_selfsign() {
     local CERTFILE="0-self-signed.cert"
     local KEYFILE="0-self-signed.key"
     local CA_FILE="0-self-signed-ca.pem"
+
+    # do not stomp over a partial key -- the admin tried to do something wrong
+    if [ -e "${COCKPIT_WS_CERTS_D}/${KEYFILE}" ] && [ ! -e "${COCKPIT_WS_CERTS_D}/${CERTFILE}" ]; then
+        echo "Error: Found $KEYFILE but no $CERTFILE. Please remove the key file first." >&2
+        exit 1
+    fi
+
+    mkdir -pZ "$COCKPIT_WS_CERTS_D"
 
     # We renew certificates up to 30 days before expiry, so give ourselves a
     # year, plus 30 days.  The maximum is variously mentioned to be 397 or 398.
@@ -104,6 +108,7 @@ cmd_ipa_request() {
         ipa-getkeytab -p "HTTP/${HOST}" -k "${KEYTAB}"
 
     # request the certificate and put it into our certificate directory, so that auto-refresh works
+    mkdir -pZ "$COCKPIT_WS_CERTS_D"
     ipa-getcert request -f "${COCKPIT_WS_CERTS_D}/10-ipa.cert" -k "${COCKPIT_WS_CERTS_D}/10-ipa.key" -K "HTTP/${HOST}" -m 640 -o root:root -M 644 -w -v
 }
 

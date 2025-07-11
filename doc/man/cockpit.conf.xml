@@ -59,12 +59,12 @@
       <listitem>
         <para>By default cockpit will not accept crossdomain websocket connections. Use this
             setting to allow access from alternate domains. Origins should include scheme, host
-            and port, if necessary.</para>
+            and port, if necessary. Wildcards and glob expressions are permitted.</para>
 
         <informalexample>
 <programlisting language="ini">
 [WebService]
-Origins = https://somedomain1.com https://somedomain2.com:9090
+Origins = https://somedomain1.com https://somedomain2.com:9090 https://*.somedomain3.com
 </programlisting>
         </informalexample>
       </listitem>
@@ -108,7 +108,8 @@ ForwardedForHeader = X-Forwarded-For
             on the login screen is visible and allows logging into another server. When set to
             <literal>false</literal>, direct remote logins are disallowed. If this option is not specified
             then it will be automatically detected based on whether the
-            <command>cockpit-ssh</command> process is available or not.</para>
+            <command>cockpit-bridge</command> package is installed and the <command>ssh</command>
+            program is available.</para>
 
           <para>If cockpit-ws is exposed to the public internet, and also has access to a private
             internal network, it is recommended to explicitly set <literal>LoginTo=false</literal>. This prevents
@@ -269,6 +270,18 @@ IdleTimeout=15
 </programlisting>
           </informalexample>
           <para>When not specified, there is no idle timeout by default.</para>
+        </listitem>
+      </varlistentry>
+      <varlistentry>
+        <term><option>WarnBeforeConnecting</option></term>
+        <listitem>
+          <para>Whether to warn before connecting to remote hosts from the Shell. Defaults to true.</para>
+          <informalexample>
+<programlisting language="ini">
+[Session]
+WarnBeforeConnecting=false
+</programlisting>
+          </informalexample>
         </listitem>
       </varlistentry>
     </variablelist>

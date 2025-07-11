@@ -1,0 +1,187 @@
+#! /usr/bin/python3
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+from collections import Counter
+from functools import cache
+
+# Run tsc as a type checker and throw away much of its output, in a
+# controlled way.
+#
+# Briefly, this tool implements the missing "@ts-no-strict" annotation
+# in a post-processing step, but also adds more fine grained
+# control. We can tweaks this to behave exactly like we want.
+#
+# Being lax with some files makes it easy (if not trivial) to include
+# them in useful typechecking.  When a library file is fully typed, we
+# don't get much benefit from that unless at least of its users also
+# participate in typechecking. And to get them to participate, we need
+# to make it possible to ignore most of their internal typing
+# challenges. TypeScript is pretty good at this, actually, and
+# willingly infer the "any" type for almost anything.
+#
+# But we don't want this for our fully typed files. We don't want
+# "noImplicitAny: false" in our tsconfig.json.
+#
+# And we want to run TypeScript only once, with our ideal flavour of
+# strictness. We don't want to run some files through tsc with a
+# strict tsconfig.json, and other files with a more lax tsconfig.json,
+# and then combine the results somehow.
+#
+# This makes it less confusing when using LSP in our editors.  We will
+# see the same errors in our editors that this tool sees. Inference
+# rules seem to change depending on the configuration, so if this tool
+# uses a different tsconfig than the LSP servers, things will not
+# always make sense.
+
+# This tool recognizes the following annotation:
+#
+# - @cockpit-ts-relaxed
+#
+# If this appears in a file, any error related to implicit 'any' types
+# will be ignored.
+
+
+# These errors are ignored for "relaxed" files. This is supposed to be
+# roughly equivalent to "noImplicitAny = false".
+
+ignored_codes = [
+    "TS2683",   # 'this' implicitly has type 'any' because it does not have a type annotation.
+    "TS7005",   # Variable '*' implicitly has an 'any[]' type.
+    "TS7006",   # Parameter '*' implicitly has an 'any' type.
+    "TS7008",   # Member '*' implicitly has an 'any[]' type.
+    "TS7010",   # '*', which lacks return-type annotation, implicitly has an 'any' return type.
+    "TS7015",   # Element implicitly has an 'any' type because index expression is not of type '*'.
+    "TS7016",   # Could not find a declaration file for module '*'...
+    "TS7019",   # Rest parameter '*' implicitly has an 'any[]' type
+    "TS7022",   # '*' implicitly has type 'any'...
+    "TS7023",   # '*' implicitly has return type 'any' because ...
+    "TS7024",   # Function implicitly has return type 'any' because ...
+    "TS7031",   # Binding element '*' implicitly has an 'any' type.
+    "TS7034",   # Variable '*' implicitly has type 'any' in some locations where its type cannot be determined.
+    "TS7053",   # Element implicitly has an 'any' type because expression of type 'any' can't be used to
+                # index type '*'.
+]
+
+javascript_ignored_codes = [
+    "TS2683",   # 'this' implicitly has type 'any' because it does not have a type annotation.
+    "TS7005",   # Variable '*' implicitly has an 'any[]' type.
+    "TS7006",   # Parameter '*' implicitly has an 'any' type.
+    "TS7008",   # Member '*' implicitly has an 'any[]' type.
+    "TS7015",   # Element implicitly has an 'any' type because index expression is not of type '*'.
+    "TS7016",   # Could not find a declaration file for module '*'...
+    "TS7019",   # Rest parameter '*' implicitly has an 'any[]' type
+    "TS7022",   # '*' implicitly has type 'any'...
+    "TS7023",   # '*' implicitly has return type 'any' because ...
+    "TS7031",   # Binding element '*' implicitly has an 'any' type.
+    "TS7034",   # Variable '*' implicitly has type 'any' in some locations where its type cannot be determined.
+    "TS7053",   # Element implicitly has an 'any' type because expression of type 'any' can't be used to
+                # index type '*'.
+    "TS2531",   # Object is possibly 'null'.
+    "TS2339",   # Property X does not exist on type '{}'.
+    "TS2307",   # Cannot find module 'Y' or its corresponding type declarations.
+    "TS18046",  # 'X' is of type 'unknown'.
+    "TS2322",   # Type 'X' is not assignable to type 'never'.
+    "TS2375",   # Type 'X' is not assignable to type 'never'.
+    "TS18047",  # 'Y' is possibly 'null'.
+    "TS2345",   # Argument of type 'null' is not assignable to parameter of type '(Comparator<never> | undefined)[]'.
+    "TS2571",   # Object is of type 'unknown'.
+    "TS2353",   # Object literal may only specify known properties
+    "TS2533",   # Object is possibly 'null' or 'undefined'.
+    "TS2532",   # Object is possibly 'undefined'.
+    "TS18048",  # 'X' is possibly 'undefined'.
+    "TS2741",   # Property 'X' is missing in type
+    "TS2551",   # Property 'X' does not exist on type
+    "TS2304",   # Cannot find name 'X'
+    "TS2538",   # Type 'null' cannot be used as an index type.
+    "TS2559",   # Type 'never[]' has no properties in common with type 'DBusCallOptions'.
+    "TS2769",   # No overload matches this call.
+    "TS2739",   # Type '{ title: string; value: string; }' is missing the following properties from type
+    "TS2488",   # Type 'X' must have a '[Symbol.iterator]()' method that returns an iterator.
+    "TS2349",   # This expression is not callable.
+    "TS2554",   # Expected 0 arguments, but got 1.
+    "TS2810",   # Expected 1 argument, but got 0.
+]
+
+
+in_core_project = os.path.exists("pkg/base1")
+
+
+def should_ignore(path):
+    if path.startswith("node_modules/"):
+        return True
+    if not in_core_project and path.startswith("pkg/lib/"):
+        return True
+    return False
+
+
+@cache
+def is_relaxed(path):
+    with open(path) as fp:
+        return "@cockpit-ts-relaxed" in fp.read()
+
+
+num_errors = 0
+
+
+def show_error(lines):
+    global num_errors
+    num_errors += 1
+    for line in lines:
+        sys.stdout.write(line)
+
+
+def consider(lines, js_error_codes):
+    m = re.match(r"([^:]*)\(.*\): error ([^:]*): .*", lines[0])
+    if m and not should_ignore(m[1]):
+        relaxed = is_relaxed(m[1])
+        is_js = m[1].endswith(('.js', '.jsx'))
+
+        if is_js:
+            if m[2] not in javascript_ignored_codes:
+                show_error(lines)
+            else:
+                js_error_codes[m[2]] += 1
+        if not is_js and (not relaxed or m[2] not in ignored_codes):
+            show_error(lines)
+
+
+try:
+    proc = subprocess.Popen(["node_modules/.bin/tsc", "--pretty", "false"], stdout=subprocess.PIPE, text=True)
+except FileNotFoundError:
+    print("no tsc")
+    sys.exit(77)
+
+cur = []
+js_error_codes: Counter = Counter()
+parser = argparse.ArgumentParser(description="Run tsc as a typechecker with an allowlist of errors for JavaScript and TypeScript files")
+parser.add_argument("--stats", action="store_true", help="Display stats of the most common TypeScript errors in JavaScript files")
+args = parser.parse_args()
+
+if proc.stdout:
+    for line in proc.stdout:
+        if line[0] == " ":
+            cur += [line]
+        else:
+            if len(cur) > 0:
+                consider(cur, js_error_codes)
+            cur = [line]
+    if len(cur) > 0:
+        consider(cur, js_error_codes)
+
+if args.stats:
+    for ts_error, count in js_error_codes.most_common():
+        print(ts_error, count)
+else:
+    # Fail on unused ignored JavaScript error codes, so accidental or intentional fixes don't get ignored.
+    # For now this only applies to cockpit itself, we need to see how much this makes sense in external projects.
+    if in_core_project and len(js_error_codes) != len(javascript_ignored_codes):
+        errors = set(javascript_ignored_codes) - set(js_error_codes)
+        print(f"Unused JavaScript ignored error codes found: {','.join(errors)}", file=sys.stderr)
+        sys.exit(1)
+
+
+sys.exit(1 if num_errors > 0 else 0)

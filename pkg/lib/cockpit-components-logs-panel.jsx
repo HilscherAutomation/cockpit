@@ -75,7 +75,7 @@ export class JournalOutput {
         const full_content = [time, message, ident].join("\n");
 
         return (
-            <div className="cockpit-logline" role="row" tabIndex="0" key={entry.__CURSOR}
+            <div className="cockpit-logline" role="row" tabIndex={0} key={entry.__CURSOR}
                 data-cursor={entry.__CURSOR}
                 onClick={ev => this.onEvent(ev, entry.__CURSOR, full_content)}
                 onKeyDown={ev => this.onEvent(ev, entry.__CURSOR, full_content)}>
@@ -169,7 +169,7 @@ export class LogsPanel extends React.Component {
         const actions = (this.state.logs.length > 0 && this.props.goto_url) && <Button variant="secondary" onClick={e => cockpit.jump(this.props.goto_url)}>{_("View all logs")}</Button>;
 
         return (
-            <Card className="cockpit-log-panel">
+            <Card isPlain className="cockpit-log-panel">
                 <CardHeader actions={{ actions }}>
                     <CardTitle>{this.props.title}</CardTitle>
                 </CardHeader>

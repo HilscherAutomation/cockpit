@@ -4,12 +4,16 @@ on:
 
 jobs:
   run:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions: {}
     timeout-minutes: 20
     steps:
       - name: Install required build and test dependencies
         run: |
+          # disable man-db to speed up package install
+          echo "set man-db/auto-update false" | sudo debconf-communicate
+          sudo dpkg-reconfigure man-db
+
           sudo apt update
           sudo apt install -y --no-install-recommends autoconf automake elfutils libglib2.0-dev libsystemd-dev xsltproc xmlto gettext flatpak xvfb cockpit-system appstream
 
@@ -27,6 +31,12 @@ jobs:
 
       - name: Build and install flatpak
         run: dbus-run-session sh -x containers/flatpak/install --user --install-deps-from=flathub
+
+      # Recent Ubuntu runners disable it by default in cloud-init config
+      - name: Enable SSH password authentication
+        run: |
+          echo 'PasswordAuthentication yes' | sudo tee /etc/ssh/sshd_config.d/01-enable-password.conf
+          sudo systemctl restart ssh
 
       - name: Smoke-test the installed flatpak
         run: |

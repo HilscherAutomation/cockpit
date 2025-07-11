@@ -22,13 +22,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
 import { Checkbox } from "@patternfly/react-core/dist/esm/components/Checkbox/index.js";
 import { Card, CardBody, CardHeader, CardTitle } from '@patternfly/react-core/dist/esm/components/Card/index.js';
-import { EmptyState, EmptyStateActions, EmptyStateFooter, EmptyStateHeader, EmptyStateIcon, EmptyStateVariant } from "@patternfly/react-core/dist/esm/components/EmptyState/index.js";
+import { EmptyState, EmptyStateActions, EmptyStateFooter, EmptyStateVariant } from "@patternfly/react-core/dist/esm/components/EmptyState/index.js";
 import { Flex, FlexItem } from "@patternfly/react-core/dist/esm/layouts/Flex/index.js";
 import { HelperText, HelperTextItem } from "@patternfly/react-core/dist/esm/components/HelperText/index.js";
 import { Label, LabelGroup } from "@patternfly/react-core/dist/esm/components/Label/index.js";
 import { Page, PageBreadcrumb, PageSection } from "@patternfly/react-core/dist/esm/components/Page/index.js";
 import { Gallery } from "@patternfly/react-core/dist/esm/layouts/Gallery/index.js";
-import { Select, SelectOption } from "@patternfly/react-core/dist/esm/deprecated/components/Select/index.js";
 import { Breadcrumb, BreadcrumbItem } from "@patternfly/react-core/dist/esm/components/Breadcrumb/index.js";
 import { Form, FormGroup } from "@patternfly/react-core/dist/esm/components/Form/index.js";
 import { TextInput } from "@patternfly/react-core/dist/esm/components/TextInput/index.js";
@@ -40,6 +39,7 @@ import cockpit from 'cockpit';
 import { superuser } from "superuser";
 import * as timeformat from "timeformat";
 import { apply_modal_dialog } from "cockpit-components-dialog.jsx";
+import { MultiTypeaheadSelect } from "cockpit-components-multi-typeahead-select";
 
 import { show_unexpected_error } from "./dialog-utils.js";
 import { delete_account_dialog } from "./delete-account-dialog.js";
@@ -109,7 +109,7 @@ export function AccountDetails({ accounts, groups, current_user, user, shells })
     const [edited_locked, set_edited_locked] = useState(null);
 
     function change_real_name() {
-        if (!edited_real_name)
+        if (edited_real_name === null || edited_real_name === undefined)
             return;
 
         set_committing_real_name(true);
@@ -166,8 +166,7 @@ export function AccountDetails({ accounts, groups, current_user, user, shells })
 
     if (!accounts.length) {
         return (
-            <EmptyState variant={EmptyStateVariant.sm}>
-                <EmptyStateHeader titleText={_("Loading...")} headingLevel="h1" />
+            <EmptyState headingLevel="h1" titleText={_("Loading...")} variant={EmptyStateVariant.sm}>
                 <EmptyStateFooter><Spinner size="xl" /></EmptyStateFooter>
             </EmptyState>
         );
@@ -177,8 +176,7 @@ export function AccountDetails({ accounts, groups, current_user, user, shells })
 
     if (!account) {
         return (
-            <EmptyState variant={EmptyStateVariant.sm} id="account-failure">
-                <EmptyStateHeader titleText={<>{_("Account not available or cannot be edited.")}</>} icon={<EmptyStateIcon icon={ExclamationCircleIcon} />} headingLevel="h1" />
+            <EmptyState headingLevel="h1" icon={ExclamationCircleIcon} titleText={_("Account not available or cannot be edited.")} variant={EmptyStateVariant.sm} id="account-failure">
                 <EmptyStateFooter>
                     <EmptyStateActions>
                         <Breadcrumb>
@@ -212,11 +210,11 @@ export function AccountDetails({ accounts, groups, current_user, user, shells })
     const actions = superuser.allowed && (
         <>
             <Button variant="secondary" onClick={() => logout_account()} id="account-logout"
-              isDisabled={!account.loggedIn || account.uid == 0}>
+              isDisabled={!account.loggedIn || account.uid == 0 || user === current_user}>
                 {_("Terminate session")}
             </Button>
             { "\n" }
-            <Button isDisabled={account.uid == 0} variant="danger" id="account-delete"
+            <Button isDisabled={account.uid == 0 || user === current_user} variant="danger" id="account-delete"
                   onClick={() => delete_account_dialog(account)}>
                 {_("Delete")}
             </Button>
@@ -224,16 +222,16 @@ export function AccountDetails({ accounts, groups, current_user, user, shells })
     );
 
     return (
-        <Page id="account">
-            <PageBreadcrumb stickyOnBreakpoint={{ default: "top" }}>
+        <Page id="account" className='no-masthead-sidebar'>
+            <PageBreadcrumb hasBodyWrapper={false} stickyOnBreakpoint={{ default: "top" }}>
                 <Breadcrumb>
                     <BreadcrumbItem to="#/">{_("Accounts")}</BreadcrumbItem>
                     <BreadcrumbItem isActive>{title_name}</BreadcrumbItem>
                 </Breadcrumb>
             </PageBreadcrumb>
-            <PageSection>
+            <PageSection hasBodyWrapper={false}>
                 <Gallery hasGutter>
-                    <Card className="account-details" id="account-details">
+                    <Card isPlain className="account-details" id="account-details">
                         <CardHeader actions={{ actions }}>
                             <CardTitle id="account-title" component="h2">{title_name}</CardTitle>
                         </CardHeader>
@@ -344,7 +342,6 @@ export function AccountDetails({ accounts, groups, current_user, user, shells })
 }
 
 export const AccountGroupsSelect = ({ name, loggedIn, groups }) => {
-    const [isOpenGroup, setIsOpenGroup] = useState(false);
     const [selected, setSelected] = useState();
     const [primaryGroupName, setPrimaryGroupName] = useState();
     const [loading, setLoading] = useState(true);
@@ -382,7 +379,6 @@ export const AccountGroupsSelect = ({ name, loggedIn, groups }) => {
         setModifyingGroup(true);
         return cockpit.spawn(["gpasswd", "-d", name, group], { superuser: "require", err: "message" })
                 .then(() => {
-                    setIsOpenGroup(false);
                     setModifyingGroup(false);
                 }, show_unexpected_error);
     };
@@ -394,36 +390,17 @@ export const AccountGroupsSelect = ({ name, loggedIn, groups }) => {
         setModifyingGroup(true);
         return cockpit.spawn(["gpasswd", "-a", name, group], { superuser: "require", err: "message" })
                 .then(() => {
-                    setIsOpenGroup(false);
                     setModifyingGroup(false);
                 }, show_unexpected_error);
-    };
-
-    const onSelectGroup = (event, selection) => {
-        if (selected.includes(selection)) {
-            removeGroup(selection);
-        } else {
-            addGroup(selection);
-        }
     };
 
     const chipGroupComponent = () => {
         return (
             <LabelGroup numLabels={10}>
                 {(selected || []).map((currentLabel, index) => {
-                    const optional = currentLabel !== primaryGroupName && superuser.allowed
-                        ? {
-                            onClose: ev => {
-                                ev.stopPropagation();
-                                removeGroup(currentLabel);
-                            }
-                        }
-                        : {};
-
                     return (
                         <Label key={currentLabel}
-                               color={groups.find(group => group.name === currentLabel).isAdmin ? "gold" : "cyan"}
-                               {...optional}
+                               color={groups.find(group => group.name === currentLabel).isAdmin ? "yellow" : "blue"}
                         >
                             {currentLabel}
                         </Label>
@@ -441,27 +418,24 @@ export const AccountGroupsSelect = ({ name, loggedIn, groups }) => {
             validated={history.length > 0 ? "warning" : "default"}
         >
             {superuser.allowed
-                ? <Select
-                   chipGroupComponent={chipGroupComponent()}
-                   isDisabled={!superuser.allowed || loading || modifyingGroup}
-                   isOpen={isOpenGroup}
-                   onSelect={onSelectGroup}
-                   onToggle={(_, isOpen) => setIsOpenGroup(isOpen)}
-                   selections={selected}
-                   toggleId="account-groups"
-                   variant="typeaheadmulti"
-                >
-                    {groups.map((option, index) => (
-                        <SelectOption
-                            isDisabled={option.name == primaryGroupName}
-                            key={index}
-                            value={option.name}
-                        />
-                    ))}
-                </Select>
+                ? <MultiTypeaheadSelect
+                      isScrollable
+                      isDisabled={loading || modifyingGroup}
+                      onAdd={val => addGroup(val)}
+                      onRemove={val => removeGroup(val)}
+                      options={groups.map((option, index) => {
+                          return {
+                              value: option.name,
+                              content: option.name,
+                              color: option.isAdmin ? "yellow" : "blue",
+                              isDisabled: option.name == primaryGroupName,
+                          };
+                      })}
+                      selected={selected || []}
+                      toggleProps={{ id: "account-groups" }} />
                 : chipGroupComponent()}
             {(history.length > 0)
-                ? <HelperText className="pf-v5-c-form__helper-text">
+                ? <HelperText className="pf-v6-c-form__helper-text">
                     <Flex>
                         {loggedIn && <HelperTextItem id="account-groups-helper" variant="warning">{_("The user must log out and log back in for the new configuration to take effect.")}</HelperTextItem>}
                         {history.length > 0 && <Button variant="link" id="group-undo-btn" isInline icon={<UndoIcon />} onClick={undoGroupChanges}>{_("Undo")}</Button>}

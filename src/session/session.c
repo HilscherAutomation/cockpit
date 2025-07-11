@@ -33,6 +33,7 @@
 #include <fcntl.h>
 
 static char *last_txt_msg = NULL;
+static char *last_err_msg = NULL;
 static char *conversation = NULL;
 
 /* This program opens a session for a given user and runs the bridge in
@@ -42,6 +43,9 @@ static char *conversation = NULL;
 
 #define COCKPIT_KTAB PACKAGE_SYSCONF_DIR "/cockpit/krb5.keytab"
 
+/* exit status if cockpit-bridge binary does not exist */
+#define EXIT_NOT_FOUND 127
+
 static gss_cred_id_t creds = GSS_C_NO_CREDENTIAL;
 
 /* Environment variables to transfer */
@@ -50,7 +54,6 @@ static const char *env_names[] = {
   "G_MESSAGES_DEBUG",
   "G_SLICE",
   "PATH",
-  "COCKPIT_REMOTE_PEER",
   NULL
 };
 
@@ -136,8 +139,6 @@ pam_conv_func (int num_msg,
                void *appdata_ptr)
 {
   char **password = (char **)appdata_ptr;
-  char *authorization = NULL;
-  char *prompt_resp = NULL;
 
   /* For keeping track of messages returned by PAM */
   char *err_msg = NULL;
@@ -216,8 +217,11 @@ pam_conv_func (int num_msg,
               txt_msg = NULL;
             }
 
-          authorization = read_authorize_response (msg[i]->msg);
-          prompt_resp = cockpit_authorize_parse_x_conversation (authorization, NULL);
+          char *authorization = read_authorize_response (msg[i]->msg);
+          char *response = get_authorize_key (authorization, "response", true);
+          char *prompt_resp = cockpit_authorize_parse_x_conversation (response, NULL);
+          cockpit_memory_clear (response, -1);
+          free (response);
 
           debug ("got prompt response");
           if (prompt_resp)
@@ -231,8 +235,7 @@ pam_conv_func (int num_msg,
               success = 0;
             }
 
-          if (authorization)
-            cockpit_memory_clear (authorization, -1);
+          cockpit_memory_clear (authorization, -1);
           free (authorization);
         }
     }
@@ -373,15 +376,14 @@ open_session (pam_handle_t *pamh)
 }
 
 __attribute__((__noreturn__)) static void
-exit_init_problem (int result_code)
+exit_pam_init_problem (int result_code)
 {
   const char *problem = NULL;
   const char *message = NULL;
-  char *payload = NULL;
 
   assert (result_code != PAM_SUCCESS);
 
-  debug ("writing init problem %d", result_code);
+  debug ("writing PAM init problem %d", result_code);
 
   if (result_code == PAM_AUTH_ERR || result_code == PAM_USER_UNKNOWN)
     problem = "authentication-failed";
@@ -397,15 +399,15 @@ exit_init_problem (int result_code)
   else
     message = pam_strerror (NULL, result_code);
 
-  if (asprintf (&payload, "\n{\"command\":\"init\",\"version\":1,\"problem\":\"%s\",\"message\":\"%s\"}",
-                problem, message) < 0)
-    errx (EX, "couldn't allocate memory for message");
+  /* we send the message through the Cockpit protocol, make sure we don't break JSON encoding */
+  char *message_sanitized = strdupx (message);
+  char *c;
+  while ((c = strchr (message_sanitized, '"')) != NULL)
+    *c = '\'';
+  while ((c = strchr (message_sanitized, '\\')) != NULL)
+    *c = '/';
 
-  if (cockpit_frame_write (STDOUT_FILENO, (unsigned char *)payload, strlen (payload)) < 0)
-    err (EX, "couldn't write init message");
-
-  free (payload);
-  exit (5);
+  exit_init_problem (problem, message_sanitized);
 }
 
 static pam_handle_t *
@@ -418,6 +420,8 @@ perform_basic (const char *rhost,
   char *user = NULL;
   int res;
 
+  assert (rhost != NULL);
+  assert (authorization != NULL);
 
   debug ("basic authentication");
 
@@ -426,7 +430,7 @@ perform_basic (const char *rhost,
   if (password == NULL)
     {
       debug ("bad basic auth input");
-      exit_init_problem (PAM_BUF_ERR);
+      exit_pam_init_problem (PAM_BUF_ERR);
     }
 
   conv.appdata_ptr = &password;
@@ -455,7 +459,7 @@ perform_basic (const char *rhost,
 
   /* Our exit code is a PAM code */
   if (res != PAM_SUCCESS)
-    exit_init_problem (res);
+    exit_pam_init_problem (res);
 
   return pamh;
 }
@@ -577,12 +581,14 @@ perform_gssapi (const char *rhost,
   gss_ctx_id_t context = GSS_C_NO_CONTEXT;
   gss_OID mech_type = GSS_C_NO_OID;
   pam_handle_t *pamh = NULL;
-  char *response = NULL;
   char *challenge;
   OM_uint32 flags = 0;
   char *str = NULL;
   OM_uint32 caps = 0;
   int res;
+
+  assert (rhost != NULL);
+  assert (authorization != NULL);
 
   res = PAM_AUTH_ERR;
 
@@ -646,11 +652,17 @@ perform_gssapi (const char *rhost,
       input.length = 0;
 
       debug ("need to continue gssapi negotiation");
-      response = read_authorize_response ("negotiate");
+      char *authorize = read_authorize_response ("negotiate");
+      char *response = get_authorize_key (authorize, "response", false);
+      cockpit_memory_clear (authorize, -1);
+      free (authorize);
+
       input.value = cockpit_authorize_parse_negotiate (response, &input.length);
       if (response)
-        cockpit_memory_clear (response, -1);
-      free (response);
+        {
+          cockpit_memory_clear (response, -1);
+          free (response);
+        }
     }
 
   str = map_gssapi_to_local (name, mech_type);
@@ -689,7 +701,7 @@ out:
   free (str);
 
   if (res != PAM_SUCCESS)
-    exit_init_problem (res);
+    exit_pam_init_problem (res);
 
   return pamh;
 }
@@ -754,6 +766,9 @@ perform_tlscert (const char *rhost,
   pam_handle_t *pamh;
   int res;
 
+  assert (rhost != NULL);
+  assert (authorization != NULL);
+
   debug ("start tls-cert authentication for cockpit-ws %u", getppid ());
 
   /* True, otherwise we wouldn't be here. */
@@ -761,8 +776,7 @@ perform_tlscert (const char *rhost,
   const char *client_certificate_filename = authorization + 9;
 
   char *username = cockpit_session_client_certificate_map_user (client_certificate_filename);
-  if (username == NULL)
-    exit_init_problem (PAM_AUTH_ERR);
+  assert (username != NULL);
 
   res = pam_start ("cockpit", username, &conv, &pamh);
   if (res != PAM_SUCCESS)
@@ -779,7 +793,7 @@ perform_tlscert (const char *rhost,
 
   /* Our exit code is a PAM code */
   if (res != PAM_SUCCESS)
-    exit_init_problem (res);
+    exit_pam_init_problem (res);
 
   return pamh;
 }
@@ -890,14 +904,22 @@ pass_to_child (int signo)
     kill (child, signo);
 }
 
+static void
+on_authorize_timeout (int signo)
+{
+  /* Can't use errx() here: https://man7.org/linux/man-pages/man7/signal-safety.7.html */
+  static const char msg[] = "timed out waiting for authorize response\n";
+  /* ignore write errors(-Wunused-result); if that fails, we can do absolutely nothing about it */
+  (void) !write (STDERR_FILENO, msg, sizeof (msg) - 1);
+  _exit(EX);
+}
+
 int
 main (int argc,
       char **argv)
 {
   pam_handle_t *pamh = NULL;
   OM_uint32 minor;
-  const char *rhost;
-  char *authorization;
   char *type = NULL;
   const char **env;
   char *ccache = NULL;
@@ -912,9 +934,12 @@ main (int argc,
   if (argc != 1 && argc != 2)
     errx (2, "invalid arguments to cockpit-session");
 
-  program_name = basename (argv[0]);
+  /* the initial authorization response should not take forever, time-bound it to guard
+   * against hacking/PID recycling attempts */
+  sigaction (SIGALRM, &(struct sigaction) { .sa_handler = on_authorize_timeout, .sa_flags = 0 }, NULL);
+  alarm (60);  /* like cockpit_ws_auth_response_timeout on the ws side */
 
-  rhost = getenv ("COCKPIT_REMOTE_PEER") ?: "";
+  program_name = basename (argv[0]);
 
   save_environment ();
 
@@ -932,9 +957,6 @@ main (int argc,
         err (1, "couldn't switch permissions correctly");
     }
 
-  signal (SIGALRM, SIG_DFL);
-  signal (SIGQUIT, SIG_DFL);
-
   cockpit_authorize_logger (authorize_logger, DEBUG_SESSION);
 
   /* Request authorization header */
@@ -943,19 +965,31 @@ main (int argc,
   write_control_end ();
 
   /* And get back the authorization header */
-  authorization = read_authorize_response ("authorization");
-  if (!cockpit_authorize_type (authorization, &type))
-    errx (EX, "invalid authorization header received");
-
-  if (strcmp (type, "basic") == 0)
-    pamh = perform_basic (rhost, authorization);
-  else if (strcmp (type, "negotiate") == 0)
-    pamh = perform_gssapi (rhost, authorization);
-  else if (strcmp (type, "tls-cert") == 0)
-    pamh = perform_tlscert (rhost, authorization);
-
+  char *authorization = read_authorize_response ("authorization");
+  char *remote_peer = get_authorize_key (authorization, "remote-peer", false);
+  /* the functions below require a non-NULL rhost */
+  const char *rhost = remote_peer ?: "";
+  debug ("initial authorize response rhost: %s", rhost);
+  char *response = get_authorize_key (authorization, "response", true);
   cockpit_memory_clear (authorization, -1);
   free (authorization);
+
+  if (!cockpit_authorize_type (response, &type))
+    errx (EX, "invalid authorization header received");
+
+  /* stop time-bounding */
+  alarm (0);
+  sigaction (SIGALRM, &(struct sigaction) { .sa_handler = SIG_DFL, .sa_flags = 0 }, NULL);
+
+  if (strcmp (type, "basic") == 0)
+    pamh = perform_basic (rhost, response);
+  else if (strcmp (type, "negotiate") == 0)
+    pamh = perform_gssapi (rhost, response);
+  else if (strcmp (type, "tls-cert") == 0)
+    pamh = perform_tlscert (rhost, response);
+
+  cockpit_memory_clear (response, -1);
+  free (response);
 
   if (!pamh)
     errx (2, "unrecognized authentication method: %s", type);
@@ -996,7 +1030,7 @@ main (int argc,
         err (EX, "%s: can't init groups", pwd->pw_name);
 
       if (!user_has_valid_login_shell (env))
-        exit_init_problem (PAM_PERM_DENIED);
+        exit_pam_init_problem (PAM_PERM_DENIED);
 
       signal (SIGTERM, pass_to_child);
       signal (SIGINT, pass_to_child);
@@ -1035,8 +1069,26 @@ main (int argc,
       status = spawn_and_wait (bridge_argv, env, NULL, -1, pwd->pw_uid, pwd->pw_gid);
     }
 
+
+  /* translate no-cockpit error for the UI, as the precise status cannot be propagated
+   * through the session Unix socket */
+  if (WIFEXITED (status) && WEXITSTATUS (status) == EXIT_NOT_FOUND)
+    {
+      debug ("bridge exited with status %d, no-cockpit", status);
+      const char *no_cockpit = "\n{\"command\":\"init\",\"version\":1,\"problem\":\"no-cockpit\",\"message\":\"cockpit-bridge not found\"}";
+      if (cockpit_frame_write (STDOUT_FILENO, (unsigned char *)no_cockpit, strlen (no_cockpit)) < 0)
+          err (EX, "couldn't write init message");
+    }
+  else
+    {
+      debug ("bridge exited with status %d", status);
+    }
+
   pam_end (pamh, PAM_SUCCESS);
 
+  rhost = NULL;
+  free (remote_peer);
+  remote_peer = NULL;
   free (last_err_msg);
   last_err_msg = NULL;
   free (last_txt_msg);

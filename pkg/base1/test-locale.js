@@ -37,6 +37,15 @@ const ru = {
     "$0 bit": ["$0 bits", "$0 бит", "$0 бита", "$0 бит"]
 };
 
+const zh_CN = {
+    "": {
+        language: "zh_CN",
+        "language-direction": "ltr",
+        "plural-forms": (n) => 0,
+    },
+    "$0 important hit": [null, "$0 次命中（含关键命中）"],
+};
+
 QUnit.test("public api", function (assert) {
     assert.equal(typeof cockpit.locale, "function", "cockpit.locale is a function");
 });
@@ -83,12 +92,18 @@ QUnit.test("ngettext simple", function (assert) {
 QUnit.test("ngettext complex", function (assert) {
     cockpit.locale(null); /* clear it */
     cockpit.locale(ru);
-    assert.equal(cockpit.ngettext("$0 bit", "$0 bits", 0), "$0 бит", "zero things");
-    assert.equal(cockpit.ngettext("$0 bit", "$0 bits", 1), "$0 бит", "one thing");
-    assert.equal(cockpit.ngettext("$0 bit", "$0 bits", 5), "$0 бит", "multiple things");
-    assert.equal(cockpit.ngettext("$0 bit", "$0 bits", 23), "$0 бита", "genitive singular");
-    assert.equal(cockpit.ngettext("$0 byte", "$0 bytes", 1), "$0 byte", "default one");
-    assert.equal(cockpit.ngettext("$0 byte", "$0 bytes", 2), "$0 bytes", "default multiple");
+    assert.equal(cockpit.ngettext("$0 bit", "$0 bits", 0), "$0 бит", "ru, zero things");
+    assert.equal(cockpit.ngettext("$0 bit", "$0 bits", 1), "$0 бит", "ru, one thing");
+    assert.equal(cockpit.ngettext("$0 bit", "$0 bits", 5), "$0 бит", "ru, multiple things");
+    assert.equal(cockpit.ngettext("$0 bit", "$0 bits", 23), "$0 бита", "ru, genitive singular");
+    assert.equal(cockpit.ngettext("$0 byte", "$0 bytes", 1), "$0 byte", "ru, default one");
+    assert.equal(cockpit.ngettext("$0 byte", "$0 bytes", 2), "$0 bytes", "ru, default multiple");
+
+    cockpit.locale(null); /* clear it */
+    cockpit.locale(zh_CN);
+    [0, 1, 2].forEach(i =>
+        assert.equal(cockpit.ngettext("$0 important hit", "$0 XXX", i), "$0 次命中（含关键命中）", `zh_CN, ${i} things`)
+    );
 });
 
 QUnit.test("translate document", function (assert) {
@@ -180,42 +195,6 @@ QUnit.test("translate glade", function (assert) {
     const tcon = document.getElementById('translatable-glade-context');
     assert.equal(tcon.innerHTML, "OntrolCAY", "translate context");
     assert.equal(tcon.hasAttribute("translate"), false, "translate context attribute removed");
-});
-
-QUnit.test("translate attributes", function (assert) {
-    cockpit.locale(null);
-    cockpit.locale(pig_latin);
-
-    const div = document.createElement('div');
-    div.innerHTML = "<span translate='title' title='Control' id='translatable-attribute'>Waiting</span>" +
-                    "<div><span translate='title' translate-context='key' title='Control'" +
-                    "id='translatable-attribute-context'>Waiting</span>" +
-                    "<span translate='yes title' title='User' id='translatable-attribute-both'>Waiting</span></div>" +
-                    "<span translate='  yes title ' title='User' id='translatable-attribute-syntax'>Waiting</span>";
-
-    document.getElementById('translations').appendChild(div);
-
-    cockpit.translate(div);
-
-    const attr = document.getElementById('translatable-attribute');
-    assert.equal(attr.getAttribute("title"), "Ontrolcay", "translate attribute");
-    assert.equal(attr.innerHTML, "Waiting", "translate attribute doesn't affect text");
-    assert.equal(attr.hasAttribute("translate"), false, "translate element removed");
-
-    const context = document.getElementById('translatable-attribute-context');
-    assert.equal(context.getAttribute("title"), "OntrolCAY", "translatable element");
-    assert.equal(context.innerHTML, "Waiting", "translate context doesn't affect text");
-    assert.equal(context.hasAttribute("translate"), false, "translate element removed");
-
-    const both = document.getElementById('translatable-attribute-both');
-    assert.equal(both.getAttribute("title"), "Useray", "translate attribute both");
-    assert.equal(both.innerHTML, "Aitingway", "translate text both");
-    assert.equal(both.hasAttribute("translate"), false, "translate removed");
-
-    const syntax = document.getElementById('translatable-attribute-both');
-    assert.equal(syntax.getAttribute("title"), "Useray", "translate syntax both");
-    assert.equal(syntax.innerHTML, "Aitingway", "translate syntax both");
-    assert.equal(syntax.hasAttribute("translate"), false, "translate removed");
 });
 
 function init() {

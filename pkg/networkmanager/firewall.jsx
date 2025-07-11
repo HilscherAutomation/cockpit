@@ -17,7 +17,7 @@
  * along with Cockpit; If not, see <https://www.gnu.org/licenses/>.
  */
 
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
 import 'cockpit-dark-theme'; // once per page
 import cockpit from "cockpit";
 import React from 'react';
@@ -36,8 +36,10 @@ import { Stack } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
 import { TextInput } from "@patternfly/react-core/dist/esm/components/TextInput/index.js";
 import { Title } from "@patternfly/react-core/dist/esm/components/Title/index.js";
 import { Toolbar, ToolbarContent, ToolbarItem } from "@patternfly/react-core/dist/esm/components/Toolbar/index.js";
-import { Page, PageBreadcrumb, PageSection, PageSectionVariants } from "@patternfly/react-core/dist/esm/components/Page/index.js";
-import { Modal } from "@patternfly/react-core/dist/esm/components/Modal/index.js";
+import { Page, PageBreadcrumb, PageSection, } from "@patternfly/react-core/dist/esm/components/Page/index.js";
+import {
+    Modal, ModalBody, ModalFooter, ModalHeader
+} from '@patternfly/react-core/dist/esm/components/Modal/index.js';
 import { ExclamationCircleIcon } from '@patternfly/react-icons';
 
 import firewall from "./firewall-client.js";
@@ -121,7 +123,8 @@ function serviceRow(props) {
         });
     }
 
-    let description, includes;
+    let description;
+    let includes;
     if (props.service.description)
         description = <p>{props.service.description}</p>;
 
@@ -184,7 +187,7 @@ function ZoneSection(props) {
 
     const actions = !firewall.readonly && <div className="zone-section-buttons">{addServiceAction}{deleteButton}</div>;
 
-    return <Card className="zone-section" data-id={props.zone.id}>
+    return <Card isPlain className="zone-section" data-id={props.zone.id}>
         <CardHeader actions={{ actions }} className="zone-section-heading">
             <Flex alignItems={{ default: 'alignSelfBaseline' }} spaceItems={{ default: 'spaceItemsXl' }}>
                 <CardTitle component="h2">
@@ -599,113 +602,115 @@ class AddEditServicesModal extends React.Component {
             <Modal id="add-services-dialog" isOpen
                    position="top" variant="medium"
                    onClose={Dialogs.close}
-                   title={titleText}
-                   footer={<>
-                       { !this.state.custom ||
-                           <Alert variant="warning"
-                               isInline
-                               title={_("Adding custom ports will reload firewalld. A reload will result in the loss of any runtime-only configuration!")} />
-                       }
-                       <Button variant='primary' isDisabled={(this.state.custom && this.checkNullValues()) || (!this.state.custom && !this.state.selected.size)} onClick={this.props.custom_id ? this.edit : this.save} aria-label={titleText}>
-                           {addText}
-                       </Button>
-                       <Button variant='link' className='btn-cancel' onClick={Dialogs.close}>
-                           {_("Cancel")}
-                       </Button>
-                   </>}
             >
-                <Form isHorizontal onSubmit={this.props.custom_id ? this.edit : this.save}>
-                    {
-                        this.state.dialogError && <ModalError dialogError={this.state.dialogError} dialogErrorDetail={this.state.dialogErrorDetail} />
-                    }
-                    { !!this.props.custom_id ||
-                        <FormGroup className="add-services-dialog-type" isInline>
-                            <Radio name="type"
-                                   id="add-services-dialog--services"
-                                   value="services"
-                                   isChecked={!this.state.custom}
-                                   onChange={this.onToggleType}
-                                   label={_("Services")} />
-                            <Radio name="type"
-                                   id="add-services-dialog--ports"
-                                   value="ports"
-                                   isChecked={this.state.custom}
-                                   onChange={this.onToggleType}
-                                   isDisabled={this.state.avail_services == null}
-                                   label={_("Custom ports")} />
-                        </FormGroup>
-                    }
-                    { this.state.custom ||
-                        <div>
-                            { services
-                                ? (
-                                    <>
-                                        <SearchInput id="filter-services-input"
-                                                 value={this.state.filter}
-                                                 onChange={this.onFilterChanged} />
-                                        <DataList className="service-list" isCompact>
-                                            {services.map(s => (
-                                                <DataListItem key={s.id} aria-labelledby={s.id}>
-                                                    <DataListItemRow>
-                                                        <DataListCheck aria-labelledby={s.id}
-                                                                   isChecked={this.state.selected.has(s.id)}
-                                                                   onChange={(event, value) => this.onToggleService(event, s.id)}
-                                                                   id={"firewall-service-" + s.id}
-                                                                   name={s.id + "-checkbox"} />
-                                                        <DataListItemCells
-                                                            dataListCells={[
-                                                                <DataListCell key="service-list-item">
-                                                                    <label htmlFor={"firewall-service-" + s.id}
-                                                                           className="service-list-iteam-heading">
-                                                                        {s.id}
-                                                                    </label>
-                                                                    {renderPorts(s)}
-                                                                </DataListCell>,
-                                                            ]} />
-                                                    </DataListItemRow>
-                                                </DataListItem>
-                                            ))}
-                                        </DataList>
-                                    </>
-                                )
-                                : (
-                                    <EmptyStatePanel loading />
-                                )}
-                        </div>
-                    }
+                <ModalHeader title={titleText} />
+                <ModalBody>
+                    <Form isHorizontal onSubmit={this.props.custom_id ? this.edit : this.save}>
+                        {
+                            this.state.dialogError && <ModalError dialogError={this.state.dialogError} dialogErrorDetail={this.state.dialogErrorDetail} />
+                        }
+                        { !!this.props.custom_id ||
+                            <FormGroup className="add-services-dialog-type" isInline>
+                                <Radio name="type"
+                                       id="add-services-dialog--services"
+                                       value="services"
+                                       isChecked={!this.state.custom}
+                                       onChange={this.onToggleType}
+                                       label={_("Services")} />
+                                <Radio name="type"
+                                       id="add-services-dialog--ports"
+                                       value="ports"
+                                       isChecked={this.state.custom}
+                                       onChange={this.onToggleType}
+                                       isDisabled={this.state.avail_services == null}
+                                       label={_("Custom ports")} />
+                            </FormGroup>
+                        }
+                        { this.state.custom ||
+                            <div>
+                                { services
+                                    ? (
+                                        <>
+                                            <SearchInput id="filter-services-input"
+                                                     value={this.state.filter}
+                                                     onChange={this.onFilterChanged} />
+                                            <DataList className="service-list" isCompact>
+                                                {services.map(s => (
+                                                    <DataListItem key={s.id} aria-labelledby={s.id}>
+                                                        <DataListItemRow>
+                                                            <DataListCheck aria-labelledby={s.id}
+                                                                       isChecked={this.state.selected.has(s.id)}
+                                                                       onChange={(event, value) => this.onToggleService(event, s.id)}
+                                                                       id={"firewall-service-" + s.id}
+                                                                       name={s.id + "-checkbox"} />
+                                                            <DataListItemCells
+                                                                dataListCells={[
+                                                                    <DataListCell key="service-list-item">
+                                                                        <label htmlFor={"firewall-service-" + s.id}
+                                                                               className="service-list-iteam-heading">
+                                                                            {s.id}
+                                                                        </label>
+                                                                        {renderPorts(s)}
+                                                                    </DataListCell>,
+                                                                ]} />
+                                                        </DataListItemRow>
+                                                    </DataListItem>
+                                                ))}
+                                            </DataList>
+                                        </>
+                                    )
+                                    : (
+                                        <EmptyStatePanel loading />
+                                    )}
+                            </div>
+                        }
+                        { !this.state.custom ||
+                            <>
+                                <FormGroup label="TCP">
+                                    <TextInput id="tcp-ports" type="text" onChange={this.validate}
+                                               validated={this.state.tcp_error ? "error" : "default"}
+                                               isDisabled={this.state.avail_services == null}
+                                               value={this.state.custom_tcp_value}
+                                               placeholder={_("Example: 22,ssh,8080,5900-5910")} />
+                                    <FormHelper helperTextInvalid={this.state.tcp_error} helperText={_("Comma-separated ports, ranges, and services are accepted")} />
+                                </FormGroup>
+
+                                <FormGroup label="UDP">
+                                    <TextInput id="udp-ports" type="text" onChange={this.validate}
+                                               validated={this.state.udp_error ? "error" : "default"}
+                                               isDisabled={this.state.avail_services == null}
+                                               value={this.state.custom_udp_value}
+                                               placeholder={_("Example: 88,2019,nfs,rsync")} />
+                                    <FormHelper helperTextInvalid={this.state.udp_error} helperText={_("Comma-separated ports, ranges, and services are accepted")} />
+                                </FormGroup>
+
+                                <FormGroup label={_("ID")}>
+                                    <TextInput id="service-name" onChange={(_event, value) => this.setId(value)} isDisabled={!!this.props.custom_id || this.state.avail_services == null}
+                                               value={this.state.custom_id} />
+                                    <FormHelper helperText={_("If left empty, ID will be generated based on associated port services and port numbers")} />
+                                </FormGroup>
+
+                                <FormGroup label={_("Description")}>
+                                    <TextInput id="service-description" onChange={(_event, value) => this.setDescription(value)} isDisabled={this.state.avail_services == null}
+                                               value={this.state.custom_description} />
+                                </FormGroup>
+                            </>
+                        }
+                    </Form>
+                </ModalBody>
+                <ModalFooter>
                     { !this.state.custom ||
-                        <>
-                            <FormGroup label="TCP">
-                                <TextInput id="tcp-ports" type="text" onChange={this.validate}
-                                           validated={this.state.tcp_error ? "error" : "default"}
-                                           isDisabled={this.state.avail_services == null}
-                                           value={this.state.custom_tcp_value}
-                                           placeholder={_("Example: 22,ssh,8080,5900-5910")} />
-                                <FormHelper helperTextInvalid={this.state.tcp_error} helperText={_("Comma-separated ports, ranges, and services are accepted")} />
-                            </FormGroup>
-
-                            <FormGroup label="UDP">
-                                <TextInput id="udp-ports" type="text" onChange={this.validate}
-                                           validated={this.state.udp_error ? "error" : "default"}
-                                           isDisabled={this.state.avail_services == null}
-                                           value={this.state.custom_udp_value}
-                                           placeholder={_("Example: 88,2019,nfs,rsync")} />
-                                <FormHelper helperTextInvalid={this.state.udp_error} helperText={_("Comma-separated ports, ranges, and services are accepted")} />
-                            </FormGroup>
-
-                            <FormGroup label={_("ID")}>
-                                <TextInput id="service-name" onChange={(_event, value) => this.setId(value)} isDisabled={!!this.props.custom_id || this.state.avail_services == null}
-                                           value={this.state.custom_id} />
-                                <FormHelper helperText={_("If left empty, ID will be generated based on associated port services and port numbers")} />
-                            </FormGroup>
-
-                            <FormGroup label={_("Description")}>
-                                <TextInput id="service-description" onChange={(_event, value) => this.setDescription(value)} isDisabled={this.state.avail_services == null}
-                                           value={this.state.custom_description} />
-                            </FormGroup>
-                        </>
+                        <Alert variant="warning"
+                            isInline
+                            title={_("Adding custom ports will reload firewalld. A reload will result in the loss of any runtime-only configuration!")} />
                     }
-                </Form>
+                    <Button variant='primary' isDisabled={(this.state.custom && this.checkNullValues()) || (!this.state.custom && !this.state.selected.size)} onClick={this.props.custom_id ? this.edit : this.save} aria-label={titleText}>
+                        {addText}
+                    </Button>
+                    <Button variant='link' className='btn-cancel' onClick={Dialogs.close}>
+                        {_("Cancel")}
+                    </Button>
+                </ModalFooter>
             </Modal>
         );
     }
@@ -791,7 +796,7 @@ class ActivateZoneModal extends React.Component {
         const interfaces = firewall.availableInterfaces.filter(i => {
             let inZone = false;
             firewall.activeZones.forEach(z => {
-                inZone |= firewall.zones[z].interfaces.indexOf(i.device) !== -1;
+                inZone ||= firewall.zones[z].interfaces.indexOf(i.device) !== -1;
             });
             return !inZone;
         });
@@ -803,97 +808,99 @@ class ActivateZoneModal extends React.Component {
             <Modal id="add-zone-dialog" isOpen
                    position="top" variant="medium"
                    onClose={Dialogs.close}
-                   title={_("Add zone")}
-                   footer={<>
-                       <Button variant="primary" onClick={this.save} isDisabled={this.state.zone === null ||
-                                                                               (this.state.interfaces.size === 0 && this.state.ipRange === "ip-entire-subnet") ||
-                                                                               (this.state.ipRange === "ip-range" && !this.state.ipRangeValue)}>
-                           { _("Add zone") }
-                       </Button>
-                       <Button variant="link" className="btn-cancel" onClick={Dialogs.close}>
-                           { _("Cancel") }
-                       </Button>
-                   </>}
             >
-                <Form isHorizontal onSubmit={this.save}>
-                    {
-                        this.state.dialogError && <ModalError dialogError={this.state.dialogError} dialogErrorDetail={this.state.dialogErrorDetail} />
-                    }
-                    <FormGroup label={ _("Trust level") } className="add-zone-zones">
-                        <Flex>
-                            <FlexItem className="add-zone-zones-firewalld">
-                                <legend>{ _("Sorted from least to most trusted") }</legend>
-                                { zones.filter(z => firewall.predefinedZones.indexOf(z) !== -1).sort((a, b) => firewall.predefinedZones.indexOf(a) - firewall.predefinedZones.indexOf(b))
-                                        .map(z =>
-                                            <Radio key={z} id={z} name="zone" value={z}
-                                                   isChecked={this.state.zone == z}
-                                                   onChange={e => this.onChange("zone", e.target.value)}
-                                                   label={ firewall.zones[z].id } />
-                                        )}
-                            </FlexItem>
-                            <FlexItem className="add-zone-zones-custom">
-                                { customZones.length > 0 && <legend>{ _("Custom zones") }</legend> }
-                                { customZones.map(z =>
-                                    <Radio key={z} id={z} name="zone" value={z}
-                                           isChecked={this.state.zone == z}
-                                           onChange={e => this.onChange("zone", e.target.value)}
-                                           label={ firewall.zones[z].id } />
-                                )}
-                            </FlexItem>
-                        </Flex>
-                    </FormGroup>
+                <ModalHeader title={_("Add zone")} />
+                <ModalBody>
+                    <Form isHorizontal onSubmit={this.save}>
+                        {
+                            this.state.dialogError && <ModalError dialogError={this.state.dialogError} dialogErrorDetail={this.state.dialogErrorDetail} />
+                        }
+                        <FormGroup label={ _("Trust level") } className="add-zone-zones">
+                            <Flex>
+                                <FlexItem className="add-zone-zones-firewalld">
+                                    <legend>{ _("Sorted from least to most trusted") }</legend>
+                                    { zones.filter(z => firewall.predefinedZones.indexOf(z) !== -1).sort((a, b) => firewall.predefinedZones.indexOf(a) - firewall.predefinedZones.indexOf(b))
+                                            .map(z =>
+                                                <Radio key={z} id={z} name="zone" value={z}
+                                                       isChecked={this.state.zone == z}
+                                                       onChange={e => this.onChange("zone", e.target.value)}
+                                                       label={ firewall.zones[z].id } />
+                                            )}
+                                </FlexItem>
+                                <FlexItem className="add-zone-zones-custom">
+                                    { customZones.length > 0 && <legend>{ _("Custom zones") }</legend> }
+                                    { customZones.map(z =>
+                                        <Radio key={z} id={z} name="zone" value={z}
+                                               isChecked={this.state.zone == z}
+                                               onChange={e => this.onChange("zone", e.target.value)}
+                                               label={ firewall.zones[z].id } />
+                                    )}
+                                </FlexItem>
+                            </Flex>
+                        </FormGroup>
 
-                    <FormGroup label={ _("Description") }>
-                        <p id="add-zone-description-readonly">
-                            { (this.state.zone && firewall.zones[this.state.zone].description) || _("No description available") }
-                        </p>
-                    </FormGroup>
+                        <FormGroup label={ _("Description") }>
+                            <p id="add-zone-description-readonly">
+                                { (this.state.zone && firewall.zones[this.state.zone].description) || _("No description available") }
+                            </p>
+                        </FormGroup>
 
-                    <FormGroup label={ _("Included services") } hasNoPaddingTop>
-                        <div id="add-zone-services-readonly">
-                            { (this.state.zone && firewall.zones[this.state.zone].services.join(", ")) || _("None") }
-                        </div>
-                        <FormHelper helperText={_("The cockpit service is automatically included")} />
-                    </FormGroup>
+                        <FormGroup label={ _("Included services") } hasNoPaddingTop>
+                            <div id="add-zone-services-readonly">
+                                { (this.state.zone && firewall.zones[this.state.zone].services.join(", ")) || _("None") }
+                            </div>
+                            <FormHelper helperText={_("The cockpit service is automatically included")} />
+                        </FormGroup>
 
-                    <FormGroup label={ _("Interfaces") } hasNoPaddingTop isInline>
-                        { physicalDevices.map(i =>
-                            <Checkbox key={i.device}
-                                      id={i.device}
-                                      value={i.device}
-                                      onChange={(event, value) => this.onInterfaceChange(event)}
-                                      isChecked={this.state.interfaces.has(i.device)}
-                                      label={i.device} />) }
-                        { virtualDevices.map(i =>
-                            <Checkbox key={i.device}
-                                      id={i.device}
-                                      value={i.device}
-                                      onChange={(event, value) => this.onInterfaceChange(event)}
-                                      isChecked={this.state.interfaces.has(i.device)}
-                                      label={i.device} />) }
-                    </FormGroup>
+                        <FormGroup label={ _("Interfaces") } hasNoPaddingTop isInline>
+                            { physicalDevices.map(i =>
+                                <Checkbox key={i.device}
+                                          id={i.device}
+                                          value={i.device}
+                                          onChange={(event, value) => this.onInterfaceChange(event)}
+                                          isChecked={this.state.interfaces.has(i.device)}
+                                          label={i.device} />) }
+                            { virtualDevices.map(i =>
+                                <Checkbox key={i.device}
+                                          id={i.device}
+                                          value={i.device}
+                                          onChange={(event, value) => this.onInterfaceChange(event)}
+                                          isChecked={this.state.interfaces.has(i.device)}
+                                          label={i.device} />) }
+                        </FormGroup>
 
-                    <FormGroup label={ _("Allowed addresses") } hasNoPaddingTop isInline>
-                        <Radio name="add-zone-ip"
-                               isChecked={this.state.ipRange == "ip-entire-subnet"}
-                               value="ip-entire-subnet"
-                               id="ip-entire-subnet"
-                               onChange={e => this.onChange("ipRange", e.target.value)}
-                               label={ _("Entire subnet") } />
-                        <Radio name="add-zone-ip"
-                               isChecked={this.state.ipRange == "ip-range"}
-                               value="ip-range"
-                               id="ip-range"
-                               onChange={e => this.onChange("ipRange", e.target.value)}
-                               label={ _("Range") } />
-                        {this.state.ipRange === "ip-range" && (
-                            <>
-                                <TextInput id="add-zone-ip" onChange={(_event, value) => this.onChange("ipRangeValue", value)} />
-                                <FormHelperText>{_("IP address with routing prefix. Separate multiple values with a comma. Example: 192.0.2.0/24, 2001:db8::/32")}</FormHelperText>
-                            </>
-                        )}
-                    </FormGroup>
-                </Form>
+                        <FormGroup label={ _("Allowed addresses") } hasNoPaddingTop isInline>
+                            <Radio name="add-zone-ip"
+                                   isChecked={this.state.ipRange == "ip-entire-subnet"}
+                                   value="ip-entire-subnet"
+                                   id="ip-entire-subnet"
+                                   onChange={e => this.onChange("ipRange", e.target.value)}
+                                   label={ _("Entire subnet") } />
+                            <Radio name="add-zone-ip"
+                                   isChecked={this.state.ipRange == "ip-range"}
+                                   value="ip-range"
+                                   id="ip-range"
+                                   onChange={e => this.onChange("ipRange", e.target.value)}
+                                   label={ _("Range") } />
+                            {this.state.ipRange === "ip-range" && (
+                                <>
+                                    <TextInput id="add-zone-ip" onChange={(_event, value) => this.onChange("ipRangeValue", value)} />
+                                    <FormHelperText>{_("IP address with routing prefix. Separate multiple values with a comma. Example: 192.0.2.0/24, 2001:db8::/32")}</FormHelperText>
+                                </>
+                            )}
+                        </FormGroup>
+                    </Form>
+                </ModalBody>
+                <ModalFooter>
+                    <Button variant="primary" onClick={this.save} isDisabled={this.state.zone === null ||
+                                                                            (this.state.interfaces.size === 0 && this.state.ipRange === "ip-entire-subnet") ||
+                                                                            (this.state.ipRange === "ip-range" && !this.state.ipRangeValue)}>
+                        { _("Add zone") }
+                    </Button>
+                    <Button variant="link" className="btn-cancel" onClick={Dialogs.close}>
+                        { _("Cancel") }
+                    </Button>
+                </ModalFooter>
             </Modal>
         );
     }
@@ -904,17 +911,20 @@ function DeleteConfirmationModal(props) {
         <Modal id="delete-confirmation-dialog" isOpen
                position="top" variant="medium"
                onClose={props.onCancel}
-               title={props.title}
-               footer={<>
-                   <Button variant="danger" onClick={props.onDelete} aria-label={cockpit.format(_("Confirm removal of $0"), props.target)}>
-                       { _("Delete") }
-                   </Button>
-                   <Button variant="link" className="btn-cancel" onClick={props.onCancel}>
-                       { _("Cancel") }
-                   </Button>
-               </>}
         >
-            {props.body && <Alert variant="warning" isInline title={props.body} />}
+            <ModalHeader title={props.title} />
+            {props.body &&
+                <ModalBody>
+                    <Alert variant="warning" isInline title={props.body} />
+                </ModalBody>}
+            <ModalFooter>
+                <Button variant="danger" onClick={props.onDelete} aria-label={cockpit.format(_("Confirm removal of $0"), props.target)}>
+                    { _("Delete") }
+                </Button>
+                <Button variant="link" className="btn-cancel" onClick={props.onCancel}>
+                    { _("Cancel") }
+                </Button>
+            </ModalFooter>
         </Modal>
     );
 }
@@ -1047,14 +1057,14 @@ export class Firewall extends React.Component {
         const enabled = this.state.firewall.enabled;
 
         return (
-            <Page>
-                <PageBreadcrumb stickyOnBreakpoint={{ default: "top" }}>
+            <Page className='no-masthead-sidebar'>
+                <PageBreadcrumb hasBodyWrapper={false} stickyOnBreakpoint={{ default: "top" }}>
                     <Breadcrumb>
-                        <BreadcrumbItem onClick={go_up} className="pf-v5-c-breadcrumb__link">{_("Networking")}</BreadcrumbItem>
+                        <BreadcrumbItem onClick={go_up} className="pf-v6-c-breadcrumb__link">{_("Networking")}</BreadcrumbItem>
                         <BreadcrumbItem isActive>{_("Firewall")}</BreadcrumbItem>
                     </Breadcrumb>
                 </PageBreadcrumb>
-                <PageSection id="firewall-heading" variant={PageSectionVariants.light} className="firewall-heading">
+                <PageSection hasBodyWrapper={false} id="firewall-heading" className="firewall-heading">
                     <Flex alignItems={{ default: 'alignItemsCenter' }} justifyContent={{ default: 'justifyContentSpaceBetween' }}>
                         <Flex alignItems={{ default: 'alignItemsCenter' }} id="firewall-heading-title-group">
                             <Title headingLevel="h2" size="3xl">
@@ -1066,7 +1076,7 @@ export class Firewall extends React.Component {
                         { enabled && !firewall.readonly && <span className="btn-group">{addZoneAction}</span> }
                     </Flex>
                 </PageSection>
-                <PageSection id="zones-listing">
+                <PageSection hasBodyWrapper={false} id="zones-listing">
                     { enabled && <Stack hasGutter>
                         {
                             zones.map(z => <ZoneSection key={z.id}

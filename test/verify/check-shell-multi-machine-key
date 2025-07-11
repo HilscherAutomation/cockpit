@@ -18,6 +18,7 @@
 # along with Cockpit; If not, see <https://www.gnu.org/licenses/>.
 
 import re
+import time
 
 import testlib
 
@@ -50,14 +51,9 @@ KEY_IDS = [
     "256 SHA256:Wd028KYmG3OVLp7dBmdx0gMR7VcarJVIfaTtKqYCmak /home/admin/.ssh/id_ed25519 (ED25519)"
 ]
 
-KEY_IDS_MD5 = [
-    "2048 93:40:9e:67:82:78:a8:99:89:39:d5:ba:e0:50:70:e1 /home/admin/.ssh/id_rsa (RSA)",
-    "256 bd:56:df:c3:ff:e4:1d:9d:f5:c4:b9:cc:64:00:d5:93 /home/admin/.ssh/id_ecdsa (ECDSA)",
-    "256 b5:80:1b:f5:98:89:2a:39:f3:78:b3:64:5c:64:33:17 /home/admin/.ssh/id_ed25519 (ED25519)",
-]
-
 
 @testlib.skipImage("TODO: ssh key check fails on Arch Linux", "arch")
+@testlib.skipBeiboot("host switching disabled in beiboot mode")
 class TestMultiMachineKeyAuth(testlib.MachineCase):
     provision = {
         "machine1": {"address": "10.111.113.1/20", "memory_mb": 512},
@@ -86,12 +82,11 @@ class TestMultiMachineKeyAuth(testlib.MachineCase):
         self.browser.eval_js("cockpit.user().then(load)")
         self.browser.wait_js_cond('loaded === true')
 
-    def check_keys(self, keys_md5, keys):
+    def check_keys(self, keys):
         def normalize(k):
-            return re.sub("/home/admin/\\.ssh/[^ ]*|test@test|ecdsa w/o comment", "", k)
-        self.assertIn(normalize(self.browser.eval_js("cockpit.spawn([ 'ssh-add', '-l' ])")),
-                      [normalize("\n".join(keys_md5) + "\n"),
-                       normalize("\n".join(keys) + "\n")])
+            return re.sub(r"(/var)?/home/admin/\.ssh/[^ ]*|test@test|ecdsa w/o comment", "", k)
+        self.assertEqual(normalize(self.browser.eval_js("cockpit.spawn([ 'ssh-add', '-l' ])")),
+                         normalize("\n".join(keys) + "\n"))
 
     def setUp(self):
         super().setUp()
@@ -102,10 +97,6 @@ class TestMultiMachineKeyAuth(testlib.MachineCase):
         self.machine2.execute("useradd user -c User", direct=True)
         self.machine2.execute(
             "sed -i 's/.*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config $(ls /etc/ssh/sshd_config.d/* 2>/dev/null || true)", direct=True)
-        # HACK - Increase MaxAuthTries because of
-        # https://bugs.libssh.org/T233 and because we have a lot of
-        # keys and cockpit-ssh tries them all, and many of them twice.
-        self.machine2.write("/etc/ssh/sshd_config", "MaxAuthTries 100", append=True)
         self.machine2.execute(self.restart_sshd, direct=True)
         self.machine2.wait_execute()
 
@@ -120,7 +111,6 @@ class TestMultiMachineKeyAuth(testlib.MachineCase):
 
     # Possible workaround - ssh as `admin` and just do `m.execute()`
     @testlib.skipBrowser("Firefox cannot do `cockpit.spawn`", "firefox")
-    @testlib.todoPybridgeRHEL8()
     def testBasic(self):
         b = self.browser
         m1 = self.machine
@@ -138,15 +128,14 @@ class TestMultiMachineKeyAuth(testlib.MachineCase):
 
         self.login_and_go("/system")
 
-        # pam-ssh-add isn't used on OSTree
-        if m1.ostree_image:
+        # pam-ssh-add isn't used with ws container
+        if m1.ws_container:
             self.load_key('id_rsa', 'foobar')
-            self.check_keys(["2048 93:40:9e:67:82:78:a8:99:89:39:d5:ba:e0:50:70:e1 id_rsa (RSA)"],
-                            ["2048 SHA256:SRvBhCmkCEVnJ6ascVH0AoVEbS3nPbowZkNevJnXtgw id_rsa (RSA)"])
+            self.check_keys(["2048 SHA256:SRvBhCmkCEVnJ6ascVH0AoVEbS3nPbowZkNevJnXtgw id_rsa (RSA)"])
         else:
             # Check our keys were loaded.
             self.load_key("id_ed25519", "locked")
-            self.check_keys(KEY_IDS_MD5, KEY_IDS)
+            self.check_keys(KEY_IDS)
 
         # Add machine
         b.switch_to_top()
@@ -156,6 +145,8 @@ class TestMultiMachineKeyAuth(testlib.MachineCase):
 
         b.wait_text(f'#hosts_setup_server_dialog {self.primary_btn_class}', "Add")
         b.click(f'#hosts_setup_server_dialog {self.primary_btn_class}')
+        b.wait_visible('#hosts_connect_server_dialog')
+        b.click('#hosts_connect_server_dialog button.pf-m-warning')
         b.wait_in_text('#hosts_setup_server_dialog', "You are connecting to 10.111.113.2 for the first time.")
         b.click(f'#hosts_setup_server_dialog {self.primary_btn_class}')
         b.wait_in_text('#hosts_setup_server_dialog h1', "Log in to")
@@ -185,6 +176,8 @@ class TestMultiMachineKeyAuth(testlib.MachineCase):
             self.load_key('id_rsa', 'foobar')
 
         b.go("/@10.111.113.2")
+        b.wait_visible('#hosts_connect_server_dialog')
+        b.click('#hosts_connect_server_dialog button.pf-m-warning')
         b.wait_visible("iframe.container-frame[name='cockpit1:10.111.113.2/system']")
 
         # Change user
@@ -192,6 +185,9 @@ class TestMultiMachineKeyAuth(testlib.MachineCase):
         m2.execute("rm /home/admin/.ssh/authorized_keys")
 
         b.click("#hosts-sel button")
+        # the opening animation takes quite long, don't move elements underneath mouse clicks
+        b.wait_js_cond('ph_count_animations("#nav-hosts") == 0')
+        time.sleep(0.2)
         b.click("button:contains('Edit hosts')")
         b.click("#nav-hosts .nav-item a[href='/@10.111.113.2'] + span button.nav-action.pf-m-secondary")
 
@@ -224,7 +220,6 @@ class TestMultiMachineKeyAuth(testlib.MachineCase):
                                     "sudo: a password is required")
 
     # Possible workaround - ssh as `admin` and just do `m.execute()`
-    @testlib.todoPybridgeRHEL8()
     def testLockedIdentity(self):
         b = self.browser
         m1 = self.machine
@@ -249,19 +244,23 @@ Host 10.111.113.2
         self.load_key('id_rsa', 'foobar')
 
         b.click("#hosts-sel button")
+        # the opening animation takes quite long, don't move elements underneath mouse clicks
+        b.wait_js_cond('ph_count_animations("#nav-hosts") == 0')
+        time.sleep(0.2)
         b.click("button:contains('Add new host')")
         b.wait_visible('#hosts_setup_server_dialog')
         b.set_input_text('#add-machine-address', "10.111.113.2")
         b.click("#hosts_setup_server_dialog .pf-m-primary")
+        b.wait_visible('#hosts_connect_server_dialog')
+        b.click('#hosts_connect_server_dialog button.pf-m-warning')
         b.wait_in_text("#hosts_setup_server_dialog", "You are connecting to 10.111.113.2 for the first time.")
         b.click("#hosts_setup_server_dialog .pf-m-primary")
         b.wait_in_text("#hosts_setup_server_dialog", "/home/admin/.ssh/id_ed25519")
         b.set_input_text("#locked-identity-password", "locked")
         b.click("#hosts_setup_server_dialog .pf-m-primary")
-        b.wait_visible("a[href='/@10.111.113.2']")
+        b.enter_page("/system", "10.111.113.2")
         self.allow_hostkey_messages()
 
-    @testlib.todoPybridgeRHEL8()
     def testLockedDefaultIdentity(self):
         b = self.browser
         m1 = self.machine
@@ -284,16 +283,21 @@ Host 10.111.113.2
         b.switch_to_top()
 
         b.click("#hosts-sel button")
+        # the opening animation takes quite long, don't move elements underneath mouse clicks
+        b.wait_js_cond('ph_count_animations("#nav-hosts") == 0')
+        time.sleep(0.2)
         b.click("button:contains('Add new host')")
         b.wait_visible('#hosts_setup_server_dialog')
         b.set_input_text("#add-machine-address", "10.111.113.2")
         b.click("#hosts_setup_server_dialog .pf-m-primary")
+        b.wait_visible('#hosts_connect_server_dialog')
+        b.click('#hosts_connect_server_dialog button.pf-m-warning')
         b.wait_in_text("#hosts_setup_server_dialog", "You are connecting to 10.111.113.2 for the first time.")
         b.click("#hosts_setup_server_dialog .pf-m-primary")
         b.wait_in_text("#hosts_setup_server_dialog", "/home/admin/.ssh/id_rsa")
         b.set_input_text("#locked-identity-password", "foobarfoo")
         b.click("#hosts_setup_server_dialog .pf-m-primary")
-        b.wait_visible("a[href='/@10.111.113.2']")
+        b.enter_page("/system", "10.111.113.2")
         self.allow_hostkey_messages()
 
 

@@ -19,8 +19,9 @@
 
 import cockpit from "cockpit";
 import React from "react";
+import 'cockpit-dark-theme'; // once per page
 
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
 import "../../node_modules/@patternfly/patternfly/components/Page/page.css";
 
 import { show_modal_dialog } from "cockpit-components-dialog.jsx";
@@ -29,6 +30,8 @@ import { PatternDialogBody } from "./react-demo-dialog.jsx";
 import { showCardsDemo } from "./react-demo-cards.jsx";
 import { showUploadDemo } from "./react-demo-file-upload.jsx";
 import { showFileAcDemo, showFileAcDemoPreselected } from "./react-demo-file-autocomplete.jsx";
+import { showTypeaheadDemo } from "./react-demo-typeahead.jsx";
+import { showMultiTypeaheadDemo } from "./react-demo-multi-typeahead.jsx";
 
 /* -----------------------------------------------------------------------------
   Modal Dialog
@@ -37,33 +40,41 @@ import { showFileAcDemo, showFileAcDemoPreselected } from "./react-demo-file-aut
 
 let lastAction = "";
 
-const onDialogStandardClicked = function(mode) {
+const onDialogStandardClicked = function(mode, progress_cb) {
     lastAction = mode;
-    const dfd = cockpit.defer();
-    dfd.notify("Starting something long");
+    let myResolve, myReject;
+    const promise = new Promise((resolve, reject) => {
+        myResolve = resolve;
+        myReject = reject;
+    });
+
+    cockpit.assert(myResolve !== undefined);
+    cockpit.assert(myReject !== undefined);
+
+    progress_cb("Starting something long");
     if (mode == 'steps') {
+        const cancel = function() {
+            window.clearTimeout(interval);
+            progress_cb("Canceling");
+            window.setTimeout(function() {
+                myReject("Action canceled");
+            }, 1000);
+        };
         let count = 0;
         const interval = window.setInterval(function() {
             count += 1;
-            dfd.notify("Step " + count);
+            progress_cb("Step " + count, cancel);
         }, 500);
         window.setTimeout(function() {
             window.clearTimeout(interval);
-            dfd.resolve();
+            myResolve();
         }, 5000);
-        dfd.promise.cancel = function() {
-            window.clearTimeout(interval);
-            dfd.notify("Canceling");
-            window.setTimeout(function() {
-                dfd.reject("Action canceled");
-            }, 1000);
-        };
     } else if (mode == 'reject') {
-        dfd.reject("Some error occurred");
+        myReject("Some error occurred");
     } else {
-        dfd.resolve();
+        myResolve();
     }
-    return dfd.promise;
+    return promise;
 };
 
 const onDialogDone = function(success) {
@@ -124,6 +135,12 @@ document.addEventListener("DOMContentLoaded", function() {
     // File autocomplete
     showFileAcDemo(document.getElementById('demo-file-ac'));
     showFileAcDemoPreselected(document.getElementById('demo-file-ac-preselected'));
+
+    // Plain typeahead select with headers and dividers
+    showTypeaheadDemo(document.getElementById('demo-typeahead'));
+
+    // Multi typeahead
+    showMultiTypeaheadDemo(document.getElementById('demo-multi-typeahead'));
 
     // Cards
     showCardsDemo(document.getElementById('demo-cards'));

@@ -4,12 +4,38 @@
  * These are routines used by our testing code.
  */
 
+/* Detect if we have any shadow DOM */
+window.__haveShadowDom = function() {
+    if (window.__haveShadowDomResult === undefined)
+        window.__haveShadowDomResult = !!Array.from(document.querySelectorAll('*')).find(el => el.shadowRoot);
+
+    return window.__haveShadowDomResult;
+};
+
+// Like querySelectorAll(), but traverses shadow DOM
+window.querySelectorAllDeep = function(query, element) {
+    const result = Array.from(
+        element.shadowRoot
+            ? element.shadowRoot.childNodes
+            : element.nodeName === 'SLOT' ? element.assignedElements() : element.childNodes,
+    )
+            .filter(element => element instanceof Element)
+            .map(element => window.querySelectorAllDeep(query, element))
+            .flat();
+
+    if (element.matches?.(query))
+        result.push(element);
+    return result;
+};
+
 window.ph_select = function(sel) {
     if (sel.includes(":contains(")) {
         if (!window.Sizzle) {
             throw new Error("Using ':contains' when window.Sizzle is not available.");
         }
         return window.Sizzle(sel);
+    } else if (window.__haveShadowDom()) {
+        return window.querySelectorAllDeep(sel, document);
     } else {
         return Array.from(document.querySelectorAll(sel));
     }
@@ -84,9 +110,15 @@ window.ph_text = function(sel) {
     const el = window.ph_find(sel);
     if (el.textContent === undefined)
         throw new Error(sel + " can not have text");
+
+    // HACK: https://github.com/patternfly/patternfly-react/issues/11678
+    const el_copy = el.cloneNode(true);
+    // find and clear .pf-v6-screen-reader subelements for HelperText
+    el_copy.querySelectorAll('.pf-v6-c-helper-text__item-text > .pf-v6-screen-reader').forEach(el => { el.textContent = '' });
+
     // 0xa0 is a non-breakable space, which is a rendering detail of Chromium
     // and awkward to handle in tests; turn it into normal spaces
-    return el.textContent.replaceAll("\xa0", " ");
+    return el_copy.textContent.replaceAll("\xa0", " ");
 };
 
 window.ph_attr = function(sel, attr) {

@@ -5,6 +5,7 @@ man_MANS =
 noinst_DATA =
 noinst_LIBRARIES =
 noinst_PROGRAMS =
+PYTHON3 ?= python3
 
 # See https://www.gnu.org/software/make/manual/html_node/Force-Targets.html
 FORCE:
@@ -45,7 +46,7 @@ distdir: $(DISTFILES)
 # Needed to ensure the tarball is correct for $(VERSION) override
 dist-hook: $(distdir)/src/cockpit/_version.py
 $(distdir)/src/cockpit/_version.py: FORCE
-	python3 '$(srcdir)'/src/build_backend.py --copy '$(srcdir)' '$(distdir)'
+	$(PYTHON3) '$(srcdir)'/src/build_backend.py --copy '$(srcdir)' '$(distdir)'
 	@rm -f $(distdir)/src/cockpit/_version.py
 	$(AM_V_GEN) echo "__version__ = '$(VERSION)'" > $@
 
@@ -78,7 +79,7 @@ distcheck-hook::
 # -----------------------------------------------------------------------------
 
 TESTS = \
-	test/static-code \
+	test/common/static-code \
 	$(NULL)
 
 clean-local::
@@ -168,14 +169,11 @@ include src/branding/fedora/Makefile.am
 include src/branding/netfield/Makefile.am
 include src/branding/opensuse/Makefile.am
 include src/branding/rhel/Makefile.am
-include src/branding/scientific/Makefile.am
 include src/branding/ubuntu/Makefile.am
-include src/bridge/Makefile.am
 include src/client/Makefile.am
 include src/common/Makefile-common.am
 include src/pam-ssh-add/Makefile.am
 include src/session/Makefile-session.am
-include src/ssh/Makefile-ssh.am
 include src/systemd/Makefile.am
 include src/tls/Makefile-tls.am
 include src/websocket/Makefile-websocket.am

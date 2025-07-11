@@ -26,12 +26,12 @@ import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.
 import { Divider } from "@patternfly/react-core/dist/esm/components/Divider/index.js";
 import { Card, CardBody, CardHeader, CardTitle } from '@patternfly/react-core/dist/esm/components/Card/index.js';
 import { ExpandableSection } from "@patternfly/react-core/dist/esm/components/ExpandableSection/index.js";
-import { Flex, FlexItem } from "@patternfly/react-core/dist/esm/layouts/Flex/index.js";
-import { Page, PageSection, PageSectionVariants } from "@patternfly/react-core/dist/esm/components/Page/index.js";
+import { Flex } from "@patternfly/react-core/dist/esm/layouts/Flex/index.js";
+import { Page, PageSection } from "@patternfly/react-core/dist/esm/components/Page/index.js";
 import { Switch } from "@patternfly/react-core/dist/esm/components/Switch/index.js";
 import { Stack, StackItem } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
-import { TextArea } from "@patternfly/react-core/dist/esm/components/TextArea/index.js";
 import { ExclamationCircleIcon, ExclamationTriangleIcon, InfoCircleIcon } from "@patternfly/react-icons";
+import { Icon, Content, ContentVariants, CodeBlock, CodeBlockCode } from "@patternfly/react-core";
 
 import { Modifications } from "cockpit-components-modifications.jsx";
 import { EmptyStatePanel } from "cockpit-components-empty-state.jsx";
@@ -116,14 +116,22 @@ class SELinuxEventDetails extends React.Component {
                 );
             }
 
+            function codeBlock(text, key) {
+                return (
+                    <CodeBlock key={key} aria-label={_("solution")}>
+                        <CodeBlockCode>{text}</CodeBlockCode>
+                    </CodeBlock>
+                );
+            }
+
             let doElement = "";
 
             // One line usually means one command
             if (itm.doText && itm.doText.indexOf("\n") < 0)
-                doElement = <TextArea aria-label={_("solution")} readOnlyVariant="default" defaultValue={itm.doText} />;
+                doElement = codeBlock(itm.doText);
 
             // There can be text with commands. Command always starts on a new line with '#'
-            // Group subsequent commands into one `<TextArea>` element.
+            // Group subsequent commands into one `<CodeBlock>` element.
             if (itm.doText && itm.doText.indexOf("\n") >= 0) {
                 const parts = [];
                 const lines = itm.doText.split("\n");
@@ -131,7 +139,7 @@ class SELinuxEventDetails extends React.Component {
                 lines.forEach(l => {
                     if (l[0] == "#") { // command
                         if (lastCommand) // When appending command remove "# ". Only the first command keeps it and it is removed later on
-                            parts[parts.length - 1] += ("\n" + l.substr(2));
+                            parts[parts.length - 1] += ("\n" + l.substring(2));
                         else
                             parts.push(l);
                         lastCommand = true;
@@ -141,10 +149,7 @@ class SELinuxEventDetails extends React.Component {
                     }
                 });
                 doElement = parts.map((p, index) => p[0] == "#"
-                    ? <TextArea aria-label={_("solution")}
-                                readOnlyVariant="plain"
-                                key={p}
-                                defaultValue={p.substr(2)} />
+                    ? codeBlock(p.substring(2), index)
                     : <span key={p}>{p}</span>);
             }
 
@@ -254,6 +259,8 @@ class SELinuxStatus extends React.Component {
         else if (!configUnknown && this.props.selinuxStatus.enforcing !== this.props.selinuxStatus.configEnforcing)
             note = _("Setting deviates from the configured state and will revert on the next boot.");
 
+        // note = _("Setting deviates from the configured state and will revert on the next boot.");
+
         return (
             <Stack hasGutter className="selinux-policy-ct">
                 <Flex spaceItems={{ default: 'spaceItemsMd' }} alignItems={{ default: 'alignItemsCenter' }}>
@@ -263,10 +270,11 @@ class SELinuxStatus extends React.Component {
                             onChange={this.props.changeSelinuxMode} />
                 </Flex>
                 { note !== null &&
-                    <Flex spaceItems={{ default: 'spaceItemsSm' }} alignItems={{ default: 'alignItemsCenter' }}>
-                        <InfoCircleIcon />
-                        <FlexItem>{ note }</FlexItem>
-                    </Flex>
+                    <Content component={ContentVariants.p}>
+                        <Icon isInline status="info"><InfoCircleIcon /></Icon>
+                        { "\n" }
+                        { note }
+                    </Content>
                 }
                 {errorMessage}
             </Stack>
@@ -360,16 +368,16 @@ export class SETroubleshootPage extends React.Component {
                 ];
                 // if the alert has level "red", it's critical
                 const criticalAlert = (itm.details && 'level' in itm.details && itm.details.level == "red")
-                    ? <ExclamationTriangleIcon className="ct-icon-exclamation-triangle pf-v5-c-icon pf-m-lg" />
+                    ? <ExclamationTriangleIcon className="ct-icon-exclamation-triangle pf-v6-c-icon pf-m-lg" />
                     : null;
                 const columns = [
                     { title: criticalAlert },
                     { title: itm.description }
                 ];
                 if (itm.count > 1) {
-                    columns.push({ title: <Badge isRead>{itm.count}</Badge>, props: { className: "pf-v5-c-table__action" } });
+                    columns.push({ title: <Badge isRead>{itm.count}</Badge>, props: { className: "pf-v6-c-table__action" } });
                 } else {
-                    columns.push({ title: <span />, props: { className: "pf-v5-c-table__action" } });
+                    columns.push({ title: <span />, props: { className: "pf-v6-c-table__action" } });
                 }
                 return ({
                     props: { key: itm.details ? itm.details.localId : index },
@@ -399,7 +407,7 @@ export class SETroubleshootPage extends React.Component {
                 : null
         );
         const troubleshooting = (
-            <Card>
+            <Card isPlain>
                 <CardHeader actions={{ actions }}>
                     <CardTitle component="h2">{title}</CardTitle>
                 </CardHeader>
@@ -445,8 +453,8 @@ export class SETroubleshootPage extends React.Component {
         return (
             <>
                 {errorMessage}
-                <Page>
-                    <PageSection padding={{ default: "padding" }} variant={PageSectionVariants.light}>
+                <Page className="no-masthead-sidebar">
+                    <PageSection hasBodyWrapper={false} padding={{ default: "padding" }}>
                         <SELinuxStatus
                             selinuxStatus={this.props.selinuxStatus}
                             selinuxStatusError={this.props.selinuxStatusError}
@@ -454,7 +462,7 @@ export class SETroubleshootPage extends React.Component {
                             dismissError={this.props.dismissStatusError}
                         />
                     </PageSection>
-                    <PageSection>
+                    <PageSection hasBodyWrapper={false}>
                         <Stack hasGutter>
                             <StackItem>{modifications}</StackItem>
                             <StackItem>{troubleshooting}</StackItem>

@@ -615,7 +615,7 @@ cockpit_web_response_complete (CockpitWebResponse *self)
   g_object_ref (self);
   self->complete = TRUE;
 
-  if (self->chunked)
+  if (self->chunked && !g_str_equal(self->method, "HEAD"))
     {
       bytes = g_bytes_new_static ("0\r\n\r\n", 5);
       queue_bytes (self, bytes);
@@ -1115,6 +1115,7 @@ cockpit_web_response_error_with_body (CockpitWebResponse *self,
                                       GBytes *body)
 {
   g_autofree gchar *escaped = NULL;
+  g_autofree gchar *reason_local = NULL;
   const gchar *message;
 
   g_return_if_fail (COCKPIT_IS_WEB_RESPONSE (self));
@@ -1155,14 +1156,14 @@ cockpit_web_response_error_with_body (CockpitWebResponse *self,
           break;
         default:
           if (code < 100)
-            reason = g_strdup_printf ("%u Continue", code);
+            reason_local = g_strdup_printf ("%u Continue", code);
           else if (code < 200)
-            reason = g_strdup_printf ("%u OK", code);
+            reason_local = g_strdup_printf ("%u OK", code);
           else if (code < 300)
-            reason = g_strdup_printf ("%u Moved", code);
+            reason_local = g_strdup_printf ("%u Moved", code);
           else
-            reason = g_strdup_printf ("%u Failed", code);
-          message = reason;
+            reason_local = g_strdup_printf ("%u Failed", code);
+          message = reason_local;
           break;
         }
     }

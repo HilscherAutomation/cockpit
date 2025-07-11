@@ -21,16 +21,16 @@ function debug(...args) {
     /* Dark mode */
     const theme = localStorage.getItem('shell:style') || 'auto';
     if ((window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches && theme === "auto") || theme === "dark") {
-        document.documentElement.classList.add('pf-v5-theme-dark');
+        document.documentElement.classList.add('pf-v6-theme-dark');
     } else {
-        document.documentElement.classList.remove('pf-v5-theme-dark');
+        document.documentElement.classList.remove('pf-v6-theme-dark');
     }
 
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', event => {
         if ((event.matches && theme === "auto") || theme === "dark") {
-            document.documentElement.classList.add('pf-v5-theme-dark');
+            document.documentElement.classList.add('pf-v6-theme-dark');
         } else {
-            document.documentElement.classList.remove('pf-v5-theme-dark');
+            document.documentElement.classList.remove('pf-v6-theme-dark');
         }
     });
 
@@ -69,7 +69,10 @@ function debug(...args) {
 
     const _ = gettext;
 
-    let login_path, application, org_login_path, org_application;
+    let login_path;
+    let application;
+    let org_login_path;
+    let org_application;
     const qs_re = /[?&]?([^=]+)=([^&]*)/g;
     let oauth_redirect_to = null;
 
@@ -188,7 +191,7 @@ function debug(...args) {
             const len = content.length;
             if ((content[0] === '"' || content[0] === '\'') &&
                 len > 2 && content[len - 1] === content[0])
-                content = content.substr(1, len - 2);
+                content = content.substring(1, len - 1);
             elt.innerHTML = content || def;
         } else {
             elt.removeAttribute("class");
@@ -211,7 +214,7 @@ function debug(...args) {
                 // Render a "helper text" warning above the log in button
                 document.querySelector("#login .login-actions").insertAdjacentHTML(
                     "beforebegin",
-                    "<div class='pf-v5-c-helper-text pf-m-warning' id='bypass-warning'>" +
+                    "<div class='pf-v6-c-helper-text pf-m-warning' id='bypass-warning'>" +
                     _("Cockpit might not render correctly in your browser") +
                     "</div>"
                 );
@@ -541,15 +544,17 @@ function debug(...args) {
         id("login-info-message").textContent = "";
     }
 
-    function login_failure(msg, form) {
+    function login_failure(title, msg, form) {
         clear_errors();
-        if (msg) {
+        if (title) {
             /* OAuth failures are always fatal */
             if (oauth) {
-                fatal(msg);
+                fatal(title);
             } else {
                 show_form(form || "login");
+                id("login-error-title").textContent = title;
                 id("login-error-message").textContent = msg;
+                hideToggle("#error-group .pf-v6-c-alert__description", !msg);
                 show("#error-group");
             }
         }
@@ -569,7 +574,9 @@ function debug(...args) {
             login_failure(msg);
         } else {
             clear_errors();
+            id("login-error-title").textContent = title;
             id("login-error-message").textContent = msg;
+            hideToggle("#error-group .pf-v6-c-alert__description", !msg);
             show("#error-group");
             toggle_options(null, true);
             show_form("login");
@@ -696,7 +703,7 @@ function debug(...args) {
 
             const b1 = document.createElement("button");
             b1.textContent = host;
-            b1.classList.add("pf-v5-c-button", "pf-m-tertiary", "host-name");
+            b1.classList.add("pf-v6-c-button", "pf-m-tertiary", "host-name");
             b1.addEventListener("click", () => {
                 call_login();
             });
@@ -847,13 +854,6 @@ function debug(...args) {
         const key_type = key.split(" ")[1];
         const db_keys = get_hostkeys(key_host);
 
-        // code path for old C cockpit-ssh, which doesn't set a known_hosts file in advance (like beiboot)
-        if (db_keys == key) {
-            debug("do_hostkey_verification: received key matches known_hosts database, auto-accepting fingerprint", data.default);
-            converse(data.id, data.default);
-            return;
-        }
-
         if (db_keys) {
             debug("do_hostkey_verification: received key fingerprint", data.default, "for host", key_host,
                   "does not match key in known_hosts database:", db_keys, "; treating as changed");
@@ -885,18 +885,16 @@ function debug(...args) {
 
         function call_converse() {
             id("login-button").removeEventListener("click", call_converse);
-            login_failure(null, "hostkey");
+            login_failure(null, null, "hostkey");
+            // cockpit-beiboot sends only a placeholder, defer to login-data in setup_localstorage()
             if (key.endsWith(" login-data")) {
-                // cockpit-beiboot sends only a placeholder, defer to login-data in setup_localstorage()
                 login_data_host = key_host;
-                debug("call_converse(): got placeholder host key (beiboot code path) for", login_data_host,
-                      ", deferring db update");
+                debug("call_converse(): got placeholder host keyfor", login_data_host, ", deferring db update");
+                converse(data.id, data.default);
             } else {
-                // cockpit-ssh already sends the actual key here
-                set_hostkeys(key_host, key);
-                debug("call_converse(): got real host key (cockpit-ssh code path) for", login_data_host);
+                console.error("login: got unexpected host key prompt, expecting login-data placeholder:", key);
+                fatal(_("Internal protocol error"));
             }
-            converse(data.id, data.default);
         }
 
         id("login-button").addEventListener("click", call_converse);
@@ -939,12 +937,12 @@ function debug(...args) {
         function call_converse() {
             id("conversation-input").removeEventListener("keydown", key_down);
             id("login-button").removeEventListener("click", call_converse);
-            login_failure(null, "conversation");
+            login_failure(null, null, "conversation");
             converse(prompt_data.id, id("conversation-input").value);
         }
 
         function key_down(e) {
-            login_failure(null, "conversation");
+            login_failure(null, null, "conversation");
             if (e.which == 13) {
                 call_converse();
             }
@@ -1043,13 +1041,13 @@ function debug(...args) {
                         const user = trim(id("login-user-input").value);
                         fatal(format(_("The server refused to authenticate '$0' using password authentication, and no other supported authentication methods are available."), user));
                     } else if (xhr.statusText.indexOf("terminated") > -1) {
-                        login_failure(_("Authentication failed: Server closed connection"));
+                        login_failure(_("Authentication failed"), _("Server closed connection"));
                     } else if (xhr.statusText.indexOf("no-host") > -1) {
                         host_failure(_("Unable to connect to that address"));
                     } else if (xhr.statusText.indexOf("unknown-hostkey") > -1) {
-                        host_failure(_("Refusing to connect. Hostkey is unknown"));
+                        host_failure(_("Refusing to connect"), _("Hostkey is unknown"));
                     } else if (xhr.statusText.indexOf("unknown-host") > -1) {
-                        host_failure(_("Refusing to connect. Host is unknown"));
+                        host_failure(_("Refusing to connect"), _("Host is unknown"));
                     } else if (xhr.statusText.indexOf("invalid-hostkey") > -1) {
                         /* ssh/ferny/beiboot immediately fail in this case, it's not a conversation;
                          * ask the user for confirmation and try again */
@@ -1058,9 +1056,9 @@ function debug(...args) {
                             ssh_host_key_change_host = login_machine;
                             call_login();
                         } else {
-                            // but only once, to avoid loops; this is also the code path for cockpit-ssh
+                            // but only once, to avoid loops
                             debug("send_login_request(): invalid-hostkey, and already retried, giving up");
-                            host_failure(_("Refusing to connect. Hostkey does not match"));
+                            host_failure(_("Refusing to connect"), _("Hostkey does not match"));
                         }
                     } else if (xhr.statusText.indexOf("legal-disclaimer-acceptance-required") > -1) {
                         // Hilscher specific
@@ -1074,11 +1072,18 @@ function debug(...args) {
                     } else if (is_conversation) {
                         login_failure(_("Authentication failed"));
                     } else {
-                        login_failure(_("Wrong user name or password"));
+                        login_failure(_("Authentication failed"), _("Wrong user name or password"));
                     }
                 }
             } else if (xhr.status == 403) {
-                login_failure(_(decodeURIComponent(xhr.statusText)) || _("Permission denied"));
+                const status = decodeURIComponent(xhr.statusText).trim();
+                login_failure(_("Permission denied"), status === "Permission denied" ? "" : status);
+            } else if (xhr.status == 500 && xhr.statusText.indexOf("no-cockpit") > -1) {
+                const message = format(
+                    _("Install the cockpit-system package (and optionally other cockpit packages) on $0 to enable web console access."),
+                    login_machine || "localhost");
+
+                login_failure(_("Packageless session unavailable"), message);
             } else if (xhr.statusText) {
                 fatal(decodeURIComponent(xhr.statusText));
             } else {
@@ -1155,7 +1160,7 @@ function debug(...args) {
             if (login_data_host) {
                 const hostkey = response["login-data"]["known-hosts"];
                 if (hostkey) {
-                    console.debug("setup_localstorage(): updating known_hosts database for deferred host key for", login_data_host, ":", hostkey);
+                    debug("setup_localstorage(): updating known_hosts database for deferred host key for", login_data_host, ":", hostkey);
                     set_hostkeys(login_data_host, hostkey);
                 } else {
                     console.error("login.js internal error: setup_localstorage() received a pending login-data host, but login-data does not contain known-hosts");

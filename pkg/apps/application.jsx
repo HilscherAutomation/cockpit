@@ -28,8 +28,7 @@ import { Stack } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
 import { ExternalLinkAltIcon } from '@patternfly/react-icons';
 
 import * as PackageKit from "./packagekit.js";
-
-import { icon_url, launch, ProgressBar, CancelButton } from "./utils.jsx";
+import { icon_url, launch, ProgressBar, CancelButton } from "./utils";
 
 import "./application.scss";
 
@@ -53,7 +52,7 @@ export const ActionButton = ({ comp, progress, action }) => {
     }
 };
 
-export const Application = ({ metainfo_db, id, progress, progress_title, action }) => {
+export const Application = ({ metainfo_db, id, progress, action }) => {
     if (!id)
         return null;
 
@@ -104,7 +103,7 @@ export const Application = ({ metainfo_db, id, progress, progress_title, action 
 
         let progress_or_launch;
         if (progress) {
-            progress_or_launch = <ProgressBar title={progress_title} data={progress} />;
+            progress_or_launch = <ProgressBar data={progress} />;
         } else if (comp.installed) {
             progress_or_launch = <Button variant="link" onClick={() => launch(comp)}>{_("Go to application")}</Button>;
         } else {
@@ -112,13 +111,13 @@ export const Application = ({ metainfo_db, id, progress, progress_title, action 
         }
 
         return (
-            <Card>
+            <Card isPlain>
                 <CardHeader actions={{
                     actions: <>{progress_or_launch}<ActionButton comp={comp} progress={progress} action={action} /></>,
                 }}>
                     <CardTitle>
                         <Flex alignItems={{ default: 'alignItemsCenter' }}>
-                            <img src={icon_url(comp.icon)} role="presentation" alt="" />
+                            <img src={icon_url(comp.icon)} alt="" />
                             <span>{comp.summary}</span>
                         </Flex>
                     </CardTitle>
@@ -129,7 +128,7 @@ export const Application = ({ metainfo_db, id, progress, progress_title, action 
                         <div className="app-description">{render_description(comp.description)}</div>
                         {comp.screenshots.length
                             ? <div className="text-center">
-                                { comp.screenshots.map((s, index) => <img key={`comp-${index}`} className="app-screenshot" role="presentation" alt="" src={s.full} />) }
+                                { comp.screenshots.map((s, index) => <img key={`comp-${index}`} className="app-screenshot" alt="" src={s.full} />) }
                             </div>
                             : null}
                     </Stack>
@@ -140,14 +139,14 @@ export const Application = ({ metainfo_db, id, progress, progress_title, action 
 
     return (
         <Page id="app-page"
-              className="application-details">
-            <PageBreadcrumb stickyOnBreakpoint={{ default: "top" }}>
+              className="application-details no-masthead-sidebar">
+            <PageBreadcrumb hasBodyWrapper={false} stickyOnBreakpoint={{ default: "top" }}>
                 <Breadcrumb>
                     <BreadcrumbItem to="#/">{_("Applications")}</BreadcrumbItem>
                     <BreadcrumbItem isActive>{comp ? comp.name : id}</BreadcrumbItem>
                 </Breadcrumb>
             </PageBreadcrumb>
-            <PageSection>
+            <PageSection hasBodyWrapper={false}>
                 {render_comp()}
             </PageSection>
         </Page>

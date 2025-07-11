@@ -2,7 +2,7 @@ name: unit-tests
 on: [pull_request, workflow_dispatch]
 jobs:
   unit-tests:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     permissions: {}
     strategy:
       matrix:
@@ -33,6 +33,6 @@ jobs:
 
             vendor/checkout
             test/common/make-bots
-            ./autogen.sh
+            ./autogen.sh --enable-strict
             make -j$(nproc) '${{ matrix.target }}'
           EOF

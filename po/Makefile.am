@@ -8,7 +8,7 @@ PO_INPUTS = $(addsuffix .po,$(PO_LINGUAS))
 # Extract translate attribute, Glade style, angular-gettext HTML translations
 po/cockpit.html.pot: $(srcdir)/package-lock.json
 	$(AM_V_GEN) mkdir -p $(dir $@) && \
-	$(srcdir)/pkg/lib/html2po.js -d $(srcdir) -o $@ \
+	$(srcdir)/pkg/lib/html2po -d $(srcdir) -o $@ \
 		$$(cd $(srcdir) && find pkg/ -name '*.html')
 
 # Extract cockpit style javascript translations
@@ -24,9 +24,9 @@ po/cockpit.js.pot:
 		$$( cd $(srcdir) && find pkg/ ! -name 'test-*' -name '*.[jt]s' -o -name '*.[jt]sx') | \
 		sed '/^#/ s/, c-format//' > $@
 
-po/cockpit.manifest.pot: $(srcdir)/package-lock.json
+po/cockpit.manifest.pot:
 	$(AM_V_GEN) mkdir -p $(dir $@) && \
-	$(srcdir)/pkg/lib/manifest2po.js -d $(srcdir) -o $@ \
+	$(srcdir)/pkg/lib/manifest2po -d $(srcdir) -o $@ \
 		$$(cd $(srcdir) && find pkg/ -name 'manifest.json')
 
 po/cockpit.appstream.pot:

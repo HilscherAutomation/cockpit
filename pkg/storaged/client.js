@@ -39,6 +39,8 @@ import { export_mount_point_mapping } from "./anaconda.jsx";
 
 import { dequal } from 'dequal/lite';
 
+import btrfs_tool_py from "./btrfs/btrfs-tool.py";
+
 /* STORAGED CLIENT
  */
 
@@ -53,15 +55,16 @@ const client = {
 
 cockpit.event_target(client);
 
-client.run = (func) => {
-    const prom = func();
-    if (prom) {
-        client.busy += 1;
-        return prom.finally(() => {
-            client.busy -= 1;
-            client.dispatchEvent("changed");
-        });
-    }
+client.run = async (func) => {
+    if (client.in_anaconda_mode())
+        await btrfs_stop_monitoring();
+    const prom = func() || Promise.resolve();
+    client.busy += 1;
+    await prom.finally(() => {
+        client.busy -= 1;
+        btrfs_start_monitor();
+        client.dispatchEvent("changed");
+    });
 };
 
 /* Superuser
@@ -185,6 +188,7 @@ function init_proxies () {
     client.vdo_vols = proxies("VDOVolume");
     client.blocks_fsys_btrfs = proxies("Filesystem.BTRFS");
     client.jobs = proxies("Job");
+    client.nvme_controller = proxies("NVMe.Controller");
 
     return client.storaged_client.watch({ path_namespace: "/org/freedesktop/UDisks2" });
 }
@@ -200,120 +204,6 @@ client.swap_sizes = instance_sampler([{ name: "swapdev.length" },
     { name: "swapdev.free" },
 ], "direct");
 
-export async function btrfs_poll() {
-    const usage_regex = /used\s+(?<used>\d+)\s+path\s+(?<device>[\w/]+)/;
-    if (!client.uuids_btrfs_subvols)
-        client.uuids_btrfs_subvols = { };
-    if (!client.uuids_btrfs_usage)
-        client.uuids_btrfs_usage = { };
-    if (!client.uuids_btrfs_default_subvol)
-        client.uuids_btrfs_default_subvol = { };
-    if (!client.uuids_btrfs_volume)
-        return;
-
-    if (!client.superuser.allowed || !client.features.btrfs) {
-        return;
-    }
-
-    const uuids_subvols = { };
-    const uuids_usage = { };
-    const btrfs_default_subvol = { };
-    for (const uuid of Object.keys(client.uuids_btrfs_volume)) {
-        const blocks = client.uuids_btrfs_blocks[uuid];
-        if (!blocks)
-            continue;
-
-        // In multi device setups MountPoints can be on either of the block devices, so try them all.
-        const MountPoints = blocks.map(block => {
-            return client.blocks_fsys[block.path];
-        }).map(block_fsys => block_fsys.MountPoints).reduce((accum, current) => accum.concat(current));
-        const mp = MountPoints[0];
-        if (mp) {
-            const mount_point = utils.decode_filename(mp);
-            try {
-                // HACK: UDisks GetSubvolumes method uses `subvolume list -p` which
-                // does not show the full subvolume path which we want to show in the UI
-                //
-                // $ btrfs subvolume list -p /run/butter
-                // ID 256 gen 7 parent 5 top level 5 path one
-                // ID 257 gen 7 parent 256 top level 256 path two
-                // ID 258 gen 7 parent 257 top level 257 path two/three/four
-                //
-                // $ btrfs subvolume list -ap /run/butter
-                // ID 256 gen 7 parent 5 top level 5 path <FS_TREE>/one
-                // ID 257 gen 7 parent 256 top level 256 path one/two
-                // ID 258 gen 7 parent 257 top level 257 path <FS_TREE>/one/two/three/four
-                const output = await cockpit.spawn(["btrfs", "subvolume", "list", "-apuq", mount_point], { superuser: "require", err: "message" });
-                const subvols = [{ pathname: "/", id: 5, parent: null }];
-                for (const line of output.split("\n")) {
-                    const m = line.match(/ID (\d+).*parent (\d+).*parent_uuid (.*)uuid (.*) path (<FS_TREE>\/)?(.*)/);
-                    if (m) {
-                        const pathname = m[6];
-                        // Ignore podman btrfs subvolumes, they are an implementation detail.
-                        if (pathname.includes("containers/storage/btrfs/subvolumes")) {
-                            continue;
-                        }
-
-                        // The parent uuid is the uuid of which this subvolume is a snapshot.
-                        // https://github.com/torvalds/linux/blob/8d025e2092e29bfd13e56c78e22af25fac83c8ec/include/uapi/linux/btrfs.h#L885
-                        let parent_uuid = m[3].trim();
-                        // BTRFS_UUID_SIZE is 16
-                        parent_uuid = parent_uuid.length < 16 ? null : parent_uuid;
-                        subvols.push({ pathname, id: Number(m[1]), parent: Number(m[2]), uuid: m[4], parent_uuid });
-                    }
-                }
-                uuids_subvols[uuid] = subvols;
-            } catch (err) {
-                console.warn(`unable to obtain subvolumes for mount point ${mount_point}`, err);
-            }
-
-            // HACK: Obtain the default subvolume, required for mounts in which do not specify a subvol and subvolid.
-            // In the future can be obtained via UDisks, it requires the btrfs partition to be mounted somewhere.
-            // https://github.com/storaged-project/udisks/commit/b6966b7076cd837f9d307eef64beedf01bc863ae
-            try {
-                const output = await cockpit.spawn(["btrfs", "subvolume", "get-default", mount_point], { superuser: "require", err: "message" });
-                const id_match = output.match(/ID (\d+).*/);
-                if (id_match)
-                    btrfs_default_subvol[uuid] = Number(id_match[1]);
-            } catch (err) {
-                console.warn(`unable to obtain default subvolume for mount point ${mount_point}`, err);
-            }
-
-            // HACK: UDisks should expose a better btrfs API with btrfs device information
-            // https://github.com/storaged-project/udisks/issues/1232
-            // TODO: optimise into just parsing one `btrfs filesystem show`?
-            try {
-                const usage_output = await cockpit.spawn(["btrfs", "filesystem", "show", "--raw", uuid], { superuser: "require", err: "message" });
-                const usages = {};
-                for (const line of usage_output.split("\n")) {
-                    const match = usage_regex.exec(line);
-                    if (match) {
-                        const { used, device } = match.groups;
-                        usages[device] = used;
-                    }
-                }
-                uuids_usage[uuid] = usages;
-            } catch (err) {
-                console.warn(`btrfs filesystem show ${uuid}`, err);
-            }
-        } else {
-            uuids_subvols[uuid] = null;
-            uuids_usage[uuid] = null;
-        }
-    }
-
-    if (!dequal(client.uuids_btrfs_subvols, uuids_subvols) || !dequal(client.uuids_btrfs_usage, uuids_usage) ||
-        !dequal(client.uuids_btrfs_default_subvol, btrfs_default_subvol)) {
-        debug("btrfs_pol new subvols:", uuids_subvols);
-        client.uuids_btrfs_subvols = uuids_subvols;
-        client.uuids_btrfs_usage = uuids_usage;
-        debug("btrfs_pol usage:", uuids_usage);
-        client.uuids_btrfs_default_subvol = btrfs_default_subvol;
-        debug("btrfs_pol default subvolumes:", btrfs_default_subvol);
-        client.update();
-    }
-}
-
 function btrfs_findmnt_poll() {
     if (!client.btrfs_mounts)
         client.btrfs_mounts = { };
@@ -327,6 +217,8 @@ function btrfs_findmnt_poll() {
                 for (const fs of mounts.filesystems) {
                     const subvolid_match = fs.options.match(/subvolid=(?<subvolid>\d+)/);
                     const subvol_match = fs.options.match(/subvol=(?<subvol>[\w\\/]+)/);
+                    const ro = fs.options.split(",").indexOf("ro") >= 0;
+
                     if (!subvolid_match && !subvol_match) {
                         console.warn("findmnt entry without subvol and subvolid", fs);
                         break;
@@ -338,6 +230,7 @@ function btrfs_findmnt_poll() {
                         pathname: subvol,
                         id: subvolid,
                         mount_points: [fs.target],
+                        rw_mount_points: ro ? [] : [fs.target],
                     };
 
                     if (!(fs.uuid in btrfs_mounts)) {
@@ -347,6 +240,8 @@ function btrfs_findmnt_poll() {
                     // We need to handle multiple mounts, they are listed separate.
                     if (subvolid in btrfs_mounts[fs.uuid]) {
                         btrfs_mounts[fs.uuid][subvolid].mount_points.push(fs.target);
+                        if (!ro)
+                            btrfs_mounts[fs.uuid][subvolid].rw_mount_points.push(fs.target);
                     } else {
                         btrfs_mounts[fs.uuid][subvolid] = subvolume;
                     }
@@ -397,15 +292,116 @@ function btrfs_findmnt_poll() {
     });
 }
 
+function btrfs_update(data) {
+    if (!client.uuids_btrfs_subvols)
+        client.uuids_btrfs_subvols = { };
+    if (!client.uuids_btrfs_usage)
+        client.uuids_btrfs_usage = { };
+    if (!client.uuids_btrfs_default_subvol)
+        client.uuids_btrfs_default_subvol = { };
+
+    const uuids_subvols = { };
+    const uuids_usage = { };
+    const default_subvol = { };
+
+    for (const uuid in data) {
+        if (data[uuid].error) {
+            console.warn("Error polling btrfs", uuid, data[uuid].error);
+        } else {
+            if (data[uuid].subvolumes) {
+                uuids_subvols[uuid] = [{ pathname: "/", id: 5, parent: null }].concat(data[uuid].subvolumes);
+            }
+            if (data[uuid].usages) {
+                uuids_usage[uuid] = data[uuid].usages;
+            }
+            if (data[uuid].default_subvolume) {
+                default_subvol[uuid] = data[uuid].default_subvolume;
+            }
+        }
+    }
+
+    if (!dequal(client.uuids_btrfs_subvols, uuids_subvols) || !dequal(client.uuids_btrfs_usage, uuids_usage) ||
+        !dequal(client.uuids_btrfs_default_subvol, default_subvol)) {
+        debug("btrfs_pol new subvols:", uuids_subvols);
+        client.uuids_btrfs_subvols = uuids_subvols;
+        client.uuids_btrfs_usage = uuids_usage;
+        debug("btrfs_pol usage:", uuids_usage);
+        client.uuids_btrfs_default_subvol = default_subvol;
+        debug("btrfs_pol default subvolumes:", default_subvol);
+        client.update();
+    }
+}
+
+export async function btrfs_tool(args) {
+    return await python.spawn(btrfs_tool_py, args, { superuser: "require" });
+}
+
+function btrfs_poll_options() {
+    if (client.in_anaconda_mode())
+        return ["--mount"];
+    else
+        return [];
+}
+
+export async function btrfs_poll() {
+    if (!client.superuser.allowed || !client.features.btrfs) {
+        return;
+    }
+
+    const data = JSON.parse(await btrfs_tool(["poll", ...btrfs_poll_options()]));
+    btrfs_update(data);
+}
+
+let btrfs_monitor_channel = null;
+
+function btrfs_start_monitor() {
+    if (!client.superuser.allowed || !client.features.btrfs) {
+        return;
+    }
+
+    if (btrfs_monitor_channel)
+        return;
+
+    const channel = python.spawn(btrfs_tool_py, ["monitor", ...btrfs_poll_options()], { superuser: "require" });
+    let buf = "";
+
+    channel.stream(output => {
+        buf += output;
+        const lines = buf.split("\n");
+        buf = lines[lines.length - 1];
+        if (lines.length >= 2) {
+            const data = JSON.parse(lines[lines.length - 2]);
+            btrfs_update(data);
+        }
+    });
+
+    channel.catch(err => {
+        throw new Error(err.toString());
+    });
+
+    btrfs_monitor_channel = channel;
+}
+
+function btrfs_stop_monitoring() {
+    if (btrfs_monitor_channel) {
+        const res = btrfs_monitor_channel.then(() => {
+            btrfs_monitor_channel = null;
+        });
+        btrfs_monitor_channel.close();
+        return res;
+    } else {
+        return Promise.resolve();
+    }
+}
+
 function btrfs_start_polling() {
     debug("starting polling for btrfs subvolumes");
-    window.setInterval(btrfs_poll, 5000);
     client.uuids_btrfs_subvols = { };
     client.uuids_btrfs_usage = { };
     client.uuids_btrfs_default_subvol = { };
     client.btrfs_mounts = { };
-    btrfs_poll();
     btrfs_findmnt_poll();
+    btrfs_start_monitor();
 }
 
 /* Derived indices.
@@ -444,7 +440,17 @@ function is_toplevel_drive(block) {
 }
 
 function update_indices() {
-    let path, block, mdraid, vgroup, pvol, lvol, pool, blockdev, fsys, part, i;
+    let path;
+    let block;
+    let mdraid;
+    let vgroup;
+    let pvol;
+    let lvol;
+    let pool;
+    let blockdev;
+    let fsys;
+    let part;
+    let i;
 
     client.broken_multipath_present = false;
     client.drives_multipath_blocks = { };
@@ -599,12 +605,12 @@ function update_indices() {
         const struct = client.lvols[path].Structure;
         const lvol = client.lvols[path];
 
-        // HACK - UDisks2 can't find the PVs of a segment when they
-        //        are on a device mapper device.
+        // HACK - UDisks2 befopre 2.11 can't find the PVs of a segment
+        //        when they are on a device mapper device.
         //
         // https://github.com/storaged-project/udisks/pull/1206
 
-        if (vgroups_with_dm_pvs[lvol.VolumeGroup])
+        if (!client.at_least("2.11") && vgroups_with_dm_pvs[lvol.VolumeGroup])
             continue;
 
         let summary;
@@ -819,13 +825,6 @@ function update_indices() {
         }
     }
 
-    client.blocks_available = { };
-    for (path in client.blocks) {
-        block = client.blocks[path];
-        if (utils.is_available_block(client, block))
-            client.blocks_available[path] = true;
-    }
-
     client.path_jobs = { };
     function enter_job(job) {
         if (!job.Objects || !job.Objects.length)
@@ -851,6 +850,8 @@ function update_indices() {
         const bfs = client.blocks_fsys_btrfs[p];
         const uuid = bfs.data.uuid;
         const block_fsys = client.blocks_fsys[p];
+        if (!uuid)
+            continue;
         if ((block_fsys && block_fsys.MountPoints.length > 0) || !client.uuids_btrfs_volume[uuid]) {
             client.uuids_btrfs_volume[uuid] = bfs;
             if (!old_uuids || !old_uuids[uuid])
@@ -866,11 +867,36 @@ function update_indices() {
     }
 }
 
+let lvm2_poll_timer = null;
+
+function update_lvm2_polling(for_visibility) {
+    const need_polling = !cockpit.hidden && !!Object.values(client.vgroups).find(vg => vg.NeedsPolling);
+
+    function poll() {
+        for (const path in client.vgroups) {
+            const vg = client.vgroups[path];
+            if (vg.NeedsPolling) {
+                vg.Poll();
+            }
+        }
+    }
+
+    if (need_polling && lvm2_poll_timer == null) {
+        lvm2_poll_timer = window.setInterval(poll, 2000);
+        if (for_visibility)
+            poll();
+    } else if (!need_polling && lvm2_poll_timer) {
+        window.clearInterval(lvm2_poll_timer);
+        lvm2_poll_timer = null;
+    }
+}
+
 client.update = (first_time) => {
     if (first_time)
         client.ready = true;
     if (client.ready) {
         update_indices();
+        update_lvm2_polling(false);
         reset_pages();
         make_overview_page();
         export_mount_point_mapping();
@@ -1041,6 +1067,7 @@ function init_model(callback) {
                     client.storaged_client.addEventListener('notify', () => client.update());
 
                     update_indices();
+                    cockpit.addEventListener("visibilitychange", () => update_lvm2_polling(true));
                     btrfs_poll().then(() => {
                         client.update(true);
                         callback();
@@ -1051,8 +1078,12 @@ function init_model(callback) {
     });
 }
 
-client.older_than = function older_than(version) {
+client.younger_than = function younger_than(version) {
     return utils.compare_versions(this.manager.Version, version) < 0;
+};
+
+client.at_least = function at_least(version) {
+    return utils.compare_versions(this.manager.Version, version) >= 0;
 };
 
 /* Mount users
@@ -1438,6 +1469,12 @@ function stratis3_start() {
                                                                                    "/org/storage/stratis3",
                                                                                    { watch: false });
 
+                // HACK - give us a sneak preview of the "r8"
+                // manager. It is used to start V2 pools.
+                client.stratis_manager_r8 = stratis.proxy(
+                    "org.storage.stratis3.Manager.r8",
+                    "/org/storage/stratis3");
+
                 return stratis.watch({ path_namespace: "/org/storage/stratis3" }).then(() => {
                     client.stratis_manager.client.addEventListener('notify', (event, data) => {
                         client.update();
@@ -1498,7 +1535,7 @@ client.strip_mount_point_prefix = (dir) => {
         if (dir.indexOf(mpp) != 0)
             return false;
 
-        dir = dir.substr(mpp.length);
+        dir = dir.substring(mpp.length);
         if (dir == "")
             dir = "/";
     }

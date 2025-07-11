@@ -1,0 +1,416 @@
+/*** PF6 overrides ***/
+// Pull in variables (for breakpoints)
+@use "global-variables" as *;
+
+$phone: 767px;
+
+// PF Select is deprecated - no issue reported upstream - this needs to be removed from our codebase
+// Make select have the expected width
+// REVIEW @Venefilyn: Check if still relevant
+.pf-v6-c-select[data-popper-reference-hidden="false"] {
+  inline-size: auto;
+}
+
+/* New issue based on the regression based on workaround causing this issue: https://github.com/cockpit-project/cockpit/issues/21671
+*/
+/* Old upstream: https://github.com/patternfly/patternfly/issues/4387 */
+/* Old Cockpit-Podman: https://github.com/cockpit-project/cockpit-podman/issues/755 */
+.pf-v6-c-form-control > select {
+  /* Right side needs to compensate for the icon and space around it,
+  for all browsers */
+  --pf-v6-c-form-control--PaddingInlineEnd: calc(
+    var(--pf-t--global--font--size--body--default) + var(--pf-t--global--spacer--lg)
+  );
+
+  @-moz-document url-prefix() { // stylelint-disable-line at-rule-no-vendor-prefix
+    /* "Unset" Firefox special handling in PatternFly; using consistent
+    spacing with others; this can be removed after PatternFly removes it */
+    --pf-v6-c-form-control--PaddingInlineStart: var(--pf-v6-c-form-control--inset--base);
+  }
+}
+
+// Fix the double-spacing issue in the non-deprecated split buttons
+// https://github.com/patternfly/patternfly/issues/6632
+// REVIEW @Venefilyn: not fixed upstream
+.pf-m-split-button .pf-v6-c-menu-toggle__controls {
+  margin: 0;
+}
+
+// Fix menus cropping contents
+// https://github.com/patternfly/patternfly/issues/6565
+// NOTE @Venefilyn: Might need to migrate to some other component
+.pf-v6-c-menu__item-text {
+  overflow: visible;
+}
+
+// The default gap between the rows in horizontal lists is too large
+.pf-v6-c-description-list.pf-m-horizontal-on-sm,
+.pf-v6-c-description-list.pf-m-horizontal {
+  --pf-v6-c-description-list--RowGap: var(--pf-t--global--spacer--300); // 1rem
+}
+
+.pf-v6-c-description-list {
+
+  // When using horizontal ruler inside description list it's just for the spacing - don't show it
+  // FIXME @Venefilyn: This seems weird.. we should not have hr like this if it's only for spacing..
+  > hr {
+    border-block-start: none;
+  }
+}
+
+.pf-v6-c-modal-box.pf-m-align-top {
+
+  // We utilize custom footers in dialogs
+  // Make sure that the buttons always appear in the next line from the inline alerts
+  .pf-v6-c-modal-box__footer {
+    flex-wrap: wrap;
+    row-gap: var(--pf-t--global--spacer--sm);
+
+    > div:not(.pf-v6-c-button):not(.dialog-wait-ct) {
+      flex: 0 0 100%;
+    }
+  }
+}
+
+// don't hide long dialog titles
+.pf-v6-c-modal-box__title-text {
+  white-space: normal;
+}
+
+// Modals should accomodate content width, as languages can make elements (especially buttons) too long
+// https://github.com/patternfly/patternfly/issues/7440
+.pf-v6-c-modal-box {
+  min-inline-size: min-content;
+}
+
+.pf-v6-c-card {
+  // https://github.com/patternfly/patternfly/issues/3959
+  // TODO @Venefilyn: Change so we use .pf-m-no-offset, then remove this
+  // --pf-v6-c-card__header-toggle--MarginTop: 0;
+
+  .pf-v6-c-card__header:not(.ct-card-expandable-header),
+  .pf-v6-c-card__header:not(.ct-card-expandable-header) .pf-v6-c-card__header-main {
+    // upstream fix (pending): https://github.com/patternfly/patternfly/pull/3714
+    display: flex;
+    flex-wrap: wrap;
+    row-gap: var(--pf-t--global--spacer--sm);
+    justify-content: space-between;
+  }
+
+  .pf-v6-c-card__header:not(.ct-card-expandable-header) {
+    > .pf-v6-c-card__actions {
+      flex-wrap: wrap;
+      row-gap: var(--pf-t--global--spacer--sm);
+
+      // PF4 CardActions act up when using buttons while the title is large of font
+      // https://github.com/patternfly/patternfly/issues/3713
+      // https://github.com/patternfly/patternfly/issues/4362
+      margin: unset;
+      padding-inline: var(--pf-v6-c-card__actions--PaddingLeft) unset;
+    }
+  }
+}
+
+// Add some spacing to nested form groups - PF4 does not support these yet
+// https://github.com/patternfly/patternfly-design/issues/1012
+.pf-v6-c-form__group-control {
+  .pf-v6-c-form__group,
+  .pf-v6-c-form__section {
+    padding-block-start: var(--pf-t--global--spacer--md);
+  }
+}
+
+// Alerts use elements that have fonts set in other frameworks (including PF3);
+// generally, this is an H4 that often has a font size and sometimes family set.
+// Therefore, it should inherit from the alert font set at the pf-v6-c-alert level.
+// https://github.com/patternfly/patternfly/issues/4206
+.pf-v6-c-alert__title {
+  font-size: inherit;
+  font-family: inherit;
+}
+
+.pf-v6-c-toolbar {
+  // Make summary content use the same vertical space as the filter toggle,
+  // when possible.
+  // https://github.com/patternfly/patternfly-design/issues/1055
+  &.ct-compact {
+    @media screen and (max-width: $pf-v6-global--breakpoint--lg - 1) {
+      display: flex;
+      flex-wrap: wrap;
+
+      > .pf-v6-c-toolbar__content:first-child {
+        flex: auto;
+      }
+
+      .pf-v6-c-toolbar__content-section {
+        inline-size: auto;
+      }
+    }
+  }
+}
+
+// When there is an Alert above the Form add some spacing
+.pf-v6-c-modal-box .pf-v6-c-alert + .pf-v6-c-form {
+  padding-block-start: var(--pf-t--global--font--size--sm);
+}
+
+// HACK: Not possible to specify text, so needs some hacks, see https://github.com/patternfly/patternfly-react/issues/6140
+.pf-v6-c-toolbar__toggle {
+  .pf-v6-c-button.pf-m-plain {
+    color: var(--pf-v6-c-button--m-link--Color);
+
+    .pf-v6-c-button__icon {
+      margin-inline-end: var(--pf-t--global--spacer--sm);
+    }
+  }
+}
+
+// Flex should use gap, not a margin hack
+// https://github.com/patternfly/patternfly/issues/4523
+// Override default spacing from lg -> md
+.pf-v6-l-flex {
+  gap: var(--pf-v6-l-flex--spacer-base);
+
+  &:not([class*="pf-m-space-items-"]) {
+    gap: var(--pf-v6-l-flex--spacer--md);
+
+    > * {
+      --pf-v6-l-flex--spacer--column: 0;
+    }
+  }
+
+  // Negate the margin hack used by immediate flex children
+  // (except for nested flex, as we want to mind the gap)
+  > :not(.pf-v6-l-flex) {
+    --pf-v6-l-flex--spacer-base: 0;
+  }
+
+  // Undo all spacer modification adjustments
+  &[class*="pf-m-space-items-"] {
+    > * {
+      --pf-v6-l-flex--spacer--column: 0;
+    }
+  }
+
+  // Re-add spacer modification adjustments on the flex layout widget
+  // (using class attribute matching for handling breakpoint -on- also)
+  @each $size in (none, xs, sm, md, lg, xl, 2xl, 3xl, 4xl) {
+    &[class*="pf-m-space-items-#{$size}"] {
+      --pf-v6-l-flex--spacer-base: var(--pf-v6-l-flex--spacer--#{$size});
+    }
+  }
+}
+
+// Realign the radio and checks: https://github.com/patternfly/patternfly/issues/5802
+.pf-v6-c-radio,
+.pf-v6-c-check {
+  // `baseline` is different in Firefox than Chrome & WebKit; use `normal`
+  align-items: normal;
+
+  // Remove incorrect PF settings on the children
+  &__label,
+  &__input {
+    margin-block: auto;
+    align-self: unset;
+    transform: unset;
+  }
+
+  // Slightly shift the radio and check widgets
+  &__input {
+    // Shift up the checks/radios for (most) browsers
+    transform: translateY(-1px);
+    // Mozilla doesn't need the translation, so undo it
+    -moz-transform: none;  // stylelint-disable-line property-no-vendor-prefix
+    // If the size is not specified, browsers may size it between 12px - 16px; so let's set it to the font size (which winds up 16px)
+    block-size: var(--pf-t--global--font--size--md);
+    // Use the height for width too
+    aspect-ratio: 1;
+  }
+}
+
+// InputMenus now use the PF Panel component which mistakenly uses position:
+// relative, when it needs to be set to absolute.
+// Additionally, it needs to be full width to properly align to the widget the
+// popover panel describes.
+// https://github.com/patternfly/patternfly-react/issues/7592
+.pf-v6-c-search-input__menu.pf-v6-c-panel {
+  position: absolute;
+  inline-size: 100%;
+}
+
+// Breadcrumb links should have the correct pointing hand cursor.
+//
+// PatternFly requires a "to" attribute for an actual link, but we use some
+// funky onClick JS for navigating and override it with a className.
+//
+// Therefore, instead of having a proper <a href="..."> being rendered, we need
+// to override the link. This is a problem with a (correct) assumption in PF
+// and our (incorrect) way of not using links (but using JavaScript) for
+// linking.
+//
+// Nevertheless, Cockpit needs to be adapted for this to work as expected.
+.pf-v6-c-breadcrumb__link {
+  cursor: pointer;
+}
+
+// Dark mode fixes for several PF components
+.pf-v6-theme-dark {
+
+  // FIXME: https://github.com/patternfly/patternfly/issues/5278
+  .pf-v6-c-modal-box .pf-v6-c-table {
+    background-color: inherit;
+  }
+
+  // FIXME: Force FormSelect's to get a readable background.
+  // https://github.com/patternfly/patternfly/issues/7593
+  // https://issues.redhat.com/browse/RHEL-97180
+  .pf-v6-c-form-control select:not(:disabled) {
+      background-color: var(--pf-t--global--background--color--floating--default);
+  }
+}
+
+// Fix icons in buttons
+.pf-v6-c-button__icon.pf-m-start {
+  margin-inline: 0 var(--pf-v6-c-button__icon--m-start--MarginRight);
+}
+
+
+@media screen and (max-width: $pf-v6-global--breakpoint--md) {
+  // Drop side padding in mobile mode,
+  // intended mainly for PF PageSection elements (pf-v6-c-page__main-section).
+  // It's similar to adding padding={{ default: 'noPadding', sm: 'padding' }},
+  // except this only affects the sides, not the top and bottom.
+  .pf-v6-c-page__main>section.pf-v6-c-page__main-section:not(.pf-m-padding) {
+    padding-inline: 0;
+  }
+
+  // Drop page padding and radius for page container in mobile mode. Make sure
+  // the page container is also covering as much as possible
+  .pf-v6-c-page {
+    --pf-v6-c-page--inset: 0;
+    --pf-v6-c-page__main-container--BorderRadius: 0;
+    --pf-v6-c-page__main-container--MaxHeight: 100%;
+  }
+}
+
+// Patch tabular number 0s to not have the slash inside
+// https://github.com/RedHatOfficial/RedHatFont/issues/53
+// https://github.com/patternfly/patternfly/issues/5308
+@font-face {
+  /* red-hat-text-regular */
+  unicode-range: U+0030;
+  font-family: RedHatText;
+  font-style: normal;
+  font-weight: 400;
+  src: url(data:font/woff2;base64,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);
+}
+
+@font-face {
+  /* red-hat-text-italic */
+  unicode-range: U+0030;
+  font-family: RedHatText;
+  font-style: italic;
+  font-weight: 400;
+  src: url(data:font/woff2;base64,d09GMgABAAAAAARQAAsAAAAADYwAAAQEAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAABmAAgkIRCAqBKIE/CwwAATYCJAMUBCAFkz0HIBvTDBGVnFUBfhzYbVYrgpXBW2mcjbMQzKj2CJ7Xi/85N8mCj8I31EGoJLfybs1VZl6ZyBK4Vh2jT3nLs5sj4dUngEuZ1e+dluoRtq0zKIlQcJ/3KFXzHQpsqVVIHAiJKjWtCRXZx1eZiYvUsXGRKq/wZqa/mnANebooLlGQzkvbYH3zQmMn02IhKYosT9HMsus4eAn7YwxsuHz9BsIUU7K//3+D7O+YisshfkyPYohAhgwDBFggExggNwS5XGBKp5Ns77wjgCgJZxAJSUd/+EtkvGcTotPRBgWoIcdUbAJoACBJzValtf/57znl3Xdr570fp36y5XnFPKe8Vz//gw/i1Pe/mp7yyQfnv/fhbu++FwW2/uD992tAS899ft8Trzjx6K1fv+LYrcLjHn6ydsziJQfvs/T+vXbd9uCNvNW7bXOQc2rfHfXM6M2tz2QH3HJDdeOhZ6/bcNr60+5qHVurzlm/8V2ceq8KTOj8lrZLLwhEuvjgRyZds3N7wW+VevYjfH7H+xfAF1/9ejG89NDNSUUCgYkJtRFiwh566jiLuf8msSHpIqvTNiYIFPpLICEElgAYEmcJwLYeEiA0YowASSmWC5AZEGcIkOseLwlQaMZfApR0TeMFKNs2/SRARTvbX4DquPJK1Fyav4G6PsXlaOhVfIymS8s90dK//MXJ3XSvDJeJvIoH8BD6RAtJI2YiMyfWITcqrkehX3yGkmGpjLIH0kJUDMrWS6vK41GLYdmdqJtS7IqGCcVdaMaw4ie0zCrfelfdjCoT/mNmMPqRhFKFoYAn4EN3lRy6ymXQGkHdzZk0qOVSDE28sMpAUpCmwthIibhcJeFtfkk4UoOOS9ucfNVJoSCkBNJCfGRp0GM6WHHSAca2e5XjNc9wTbxfzu6Ea9L+bzesFFy9ku2ECd4U8btM2SS6R3W0Dm7Nvct9MWBCd3CGAGwwMUlgN3wZ49tTAJ/DEwjFDmZ29mJ3cIrNNpFQ8POCMF6hO2OBiJHTJl2hWM1IqAmEdGPw2aecpAiDHtYuOAoWBOgaRC0j30/SgKTns3uMlCTSsaA5LIXzPVMpqbNQ3zXGyb+rCAq66SboZlBgH0TKIZRZb8TDpTTgfRmXZlLpYu2obzb24skIX0S9eU9FapWzKOozbZflzSW6GXkjQoskWjn00StBUChOXManswhawW0pKUkYMcWhCC3HQCq5Tpb2YA+VVMJP/LjFHXYFe5++22b/HhYBgX2DvWDJMKYOJMjwm/C3tCQUO7kgcYS2wn4xVlSi3TUef1ruwTWOT/dsRyfVaLGfUW7bTbBL7u/Spt0zJvsrQ671aEScUIObukdTouZX0C1qsUxUSreOW5fgH/+/9g2dIwMA);
+}
+
+@font-face {
+  /* red-hat-text-medium */
+  unicode-range: U+0030;
+  font-family: RedHatText;
+  font-style: normal;
+  font-weight: 700;
+  src: url(data:font/woff2;base64,d09GMgABAAAAAARYAAsAAAAADewAAAQLAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAABmAAgkIRCAqBBIEUCwwAATYCJAMUBCAFlEEHIBssDRHF5AH4ceCUZY9pfajQk3kIirq5CjGXcNU3dzw879+/rX1uIKlLfhd0AMukgzVCNamGesTI7ZlyoyVrc1NnSh8mwlFTCbdmKtP+Dit8tlI4uJx+ywNd5wGHgUayB46pjw3cEzAMA9obaA2wrQFmmmYhpw1jFzajZpAvnYxflbQxTcLQpXLM0Ca6k6JAlq87j+w4K3uxFI1geN+hw/TSSqvs7/9fkv0drbEL4rd0DbUEMmSoJkA3mUA1+dRCPvkEWuVy9Wvk3gogChCASEg2jMM3kQFbCpHLeQX5QRHkQwN0AuQDQJKKgBaFvt38Uaz7eMt7a7/Z9PEZ8aON78yfr31ftGdVrYts/HLjRxs+3vR+/avCjj48fmJf0pGHJ47HC07O3LomD7Q8+b81b41tT7+YcqBX76kHP6toeve6uOr7HbdHcPpTA4FI2z6r8ajDzNduv61o9gG+OvXRHvj62x9Z3dxvaeV5iEISCMRN8R8greRLWf67/xgxnHRSmzRJXYH8ykkgIQR6AagXFwRgsnMChLLRQYCkYEwRIFMtDguQT9n4VoD8iqfSAhRQOvUVoKDJWWEBCimZbRCgsJLZWQGK2JHvOwGK0qrU0zRQTIX+TAPF7ShYAw2UUPX+QQOlPK2B0h43qH8Zn1vtTryFcQacQ2iQEpCUyBDIdMocyKdBLkN+VfIbFFDn1ISCzqQTFFLjmYspTNgFRVLn7i4U1ap5UEyz3oPiqfNYGErocG9CKX8rC6U9rcsvKCO/kQYSqRuJuDwMtTW1taAjjw3t2SxoSmBoS0r4bCaGejLMk5AUVORhLKV0NTS4CPNkDHWmRKTxbV7zrA2Hg5iIED5xz1gixkpA9eTYMhodPRv3toVTwYZzfnC4qGIhd21cYi8zNAv28+xKENSUf4kTUDV3CeiKHtmuZ5iVq4VkIvBLjqMuL1k33vskVyY0SJAOHQrQWp1NH+/QrQwsLOn0E/yJTk3V+ls1HV21l+kE5fySUAsfcTET7pUUkoghMeVgReYSIGkgqh/yvZMCCzNqeIwJLkmIVKFwqAij/piFK0VURf4O8Tvu43iIgnSaBx0kHOxCkGz4FBoi5j/kigfE2TnGwkg58w7pYGap20if9/p69PIrmKo/EcXZ83nb778FJJpPOBNISDCEbOjCr5wnOFjXszsvzLpQFCxKMUkkxZQ6hYTqEpKrYWNsCYyvHC4RuAopKPidh9FUe5gtE2nhvsDPoN1DZrBablAY/vtRWGYtRDj3dii4i2KFX/5YnaLQ3Jx/M14CbaSX7fC6iCkQYjcpW2xHgXndGplBaGzmiD8/n4udCiLBhyIarSIVSpzlI9gYQiEnAv1uYLpLNP0kBmgE4daZBPYHprlOLAA=);
+}
+
+@font-face {
+  /* red-hat-text-medium-italic */
+  unicode-range: U+0030;
+  font-family: RedHatText;
+  font-style: italic;
+  font-weight: 700;
+  src: url(data:font/woff2;base64,d09GMgABAAAAAASEAAsAAAAADlwAAAQ2AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAABmAAgkIRCAqBFIEsCwwAATYCJAMUBCAFlSEHIBukDRGVnM0Bfh7YtpMt1pMMwRCUu0ZjuTUEq7QbeQVD9K0cz/Ot8btvZnf/YKZJNFnHE01D/RnzSKWKhUyUChVONznY33vvR2dGwQ2aI5GoNmehLcEOiWwABJeyW3OVmVcm8ohUq47RZ7FbwPRAePVny2WpHmHbKIFFSYTiZgv0eNbhCK663oXEgZAouis1niAM8d0RrIJ/++6lfvsW4tlZz+XCcgddeYS86ClXUGEcuZ9pztoaHSVD7Uom1PoYXN4HzmM1HDvo8UJstrl+/duh/ooIdyFfyySwWFBRMV/ALlUwX2cxOp1g8////ez/7wTIYNOHFBRPpuM3UT2dduT/fwTQg7HosBaHAOMBUJSJ41s7f/UIRt8fohuPkYqTk0DjIYx+wDSdIBXHF4dHTScnx41XjWvbCeXg09bl7Kq2spLoZndx7KxpLys+bE+xPzlSvtEU9Kdaw+XrzSFfCjx7S7xYdVVkdxPPNt0V6Tn3pXNM35O5+5Lj8TVY8f+1pJQVQcrNGpprY9Ik7deGqZ/h49BxJ+DT3euFXl45vWgKCHjCmw1FF5wzw5Or//U/Ro5RHsGeErZC0JurgIII9gFYngkI4ITnAmJa5AKKIccFVEvTCwGdufkT0JtQdggYzCr5AkacqAYBzaT6BgLGmFS/CBjrdk8VMM7s/k7AeDMHpoAJbo+kCZhoXuMJmGx828MUE9q1+VPNbbuqdGPwlM8QK4OHYnwOQ3UoSdDZnlXozS1EGGwsFhjxtDRBs7B2yceo12BsltZPGGdzPw7jre+/YEKWDgaYaOfIK0w2u7lgirlNLucvmGpSt7lM7qfkWAGGRgZGhtBDQEM3moI2CEMXpUxIkxiaqrFAplRBDQHGchVPX5/lsEBN6JEyib5sun/VmWE4kkNiintWMinWBKkq1j5mPQKNN61wQ1xoZ4PJlTQWfjfEOg5qkYlI9NKWD4LKvsIBWNs3wdfAg/b9JD/GK04tASqxsZdO7i0AsMW2oxcemJdGiAQY6v2hj4/5jub2DnznuBqjbimBQcMNRmM/O3D5FqNuVZcqy4v1JSg8sy8eXD/7opUqTiaFNzdUr4ltdQWPsnLjOwlH+QU1zSZWiSQ6EEejweUpky0p6SA48swT/xBwKuiT9El+l5vYD1LSkIqGHupwVyFgqz9rKPLSzaGjvds6iLOcPkV66UGKvJMJY/hKQzuzbm7RfuSNODEixDT0CVekwI2Yun7uzTyIAlGRSAvNsUrPEhHr4Wac1Xe2cgCFYQwS3sbkcQPzJRV0vfftYZIvhIHN7j0prlgOThTI+EtwCbhkFD29IrGHWGFLMysqF5fCO59XB/DG+Xle3pOQIjH2k9PYLoHSvy+RUVwIR/xlEFc+BxEXVNQ/eHIo4f1HsH/OR5zIVm52mVCpjKZqyJHY+j1zNf8f/y+v5iopAAAAAA==);
+}
+
+// Workaround for https://github.com/patternfly/patternfly/issues/5865
+.pf-v6-c-card.pf-m-selectable,
+.pf-v6-c-card.pf-m-clickable {
+  isolation: auto;
+}
+
+// Override as PF Page doesn't allow empty masthead and sidebar
+@media (min-width: 75rem) {
+  .pf-v6-c-page.no-masthead-sidebar { /* custom class to scope this style to a specific page component instance */
+    --pf-v6-c-page__main-container--GridArea: var(--pf-v6-c-page--masthead--main-container--GridArea);
+  }
+}
+
+/* FIXME: Temporary rework plain cards to make it look like how PF6 is designed, removing the extra padding */
+.pf-v6-c-card.pf-m-plain {
+  .pf-v6-c-card__header {
+    padding-inline: 0;
+  }
+
+  .pf-v6-c-card__body.contains-list {
+    padding: 0;
+  }
+}
+
+// FIXME: Temporary rework table cards in mobile/small view to have row dividers between each row.
+.pf-v6-c-card.ct-small-table-card {
+  border-block-start: var(--pf-t--global--border--width--100) solid var(--pf-t--global--border--color--default);
+  border-radius: var(--pf-t--global--border--radius--0);
+}
+
+
+// NOTE @Venefilyn: This is missing in PF6 so we need to define it ourselves to make sure it works as it should
+// Tracked upstream here https://github.com/patternfly/patternfly/issues/7414
+:root[dir="rtl"] {
+  --pf-v6-global--inverse--multiplier: -1;
+}
+
+// NOTEs @Venefilyn: Expandable table has an alignment issue with the expand button and the text
+// Tracked upstream here https://github.com/patternfly/patternfly/issues/7423
+.pf-v6-c-table.pf-m-compact .pf-v6-c-table__toggle {
+  --pf-v6-c-table--m-compact__action--PaddingBlockStart: 0
+}
+
+// NOTE @Venefilyn: Selectable table has an alignment issue with the expand button and the text
+// Tracked upstream here https://github.com/patternfly/patternfly/issues/7424
+.pf-v6-c-table__td.pf-v6-c-table__check {
+  // We add 0.125 rem which isn't on PF's spacers variable list, that aligns nicely with
+  // the correct sizing (becomes 10px on compact table, 18px on normal table)
+  padding-block-start: calc(var(--pf-v6-c-table--cell--PaddingBlockStart) + 0.125rem)
+}
+
+// HACK: Patternfly has a weird issue with modals and skip to content
+// button not being hidden as it should on rtl mode. Instead, it will make the
+// page extremely wide and cause modals to be very offset. Changing from
+// `absolute` to `fixed` makes sure that it all works as it should.
+//
+// Only applicable to Firefox, works fine in Chrome. Might also be fine outside
+// of Firefox Responsive Design Mode. Verified to be an issue in PF v6.2.0
+//
+// https://github.com/patternfly/patternfly/issues/7463
+.pf-v6-c-skip-to-content {
+  position: fixed;
+}
+
+// FIXME @Venefilyn: Due to a Patternfly bug when it comes to showing the
+// scrollbars of subnavs, we have to workaround it by just making it wrap
+// instead of scroll. (ugly but functional).
+// Issue found in PF 6.2.0
+// https://github.com/patternfly/patternfly-react/issues/11751
+.services-header .pf-m-subnav {
+  --pf-v6-c-nav--m-horizontal--m-subnav--BorderRadius: var(--pf-t--global--border--radius--200);
+
+  .pf-v6-c-nav__list {
+    flex-wrap: wrap;
+  }
+}
+
+// NOTE: PF6 workaround, when table is in the small screen layout PF sets too big font-weight
+// https://github.com/patternfly/patternfly/issues/7526
+.pf-v6-c-table .pf-v6-c-table__tbody :where(.pf-v6-c-table__th, .pf-v6-c-table__td)[data-label]::before {
+    font-weight: var(--pf-t--global--font--weight--body--bold);
+}

@@ -20,7 +20,7 @@
 import testlib
 
 
-@testlib.skipOstree("OSTree always uses loopback")
+@testlib.skipWsContainer("cockpit/ws always uses loopback")
 @testlib.nondestructive
 class TestLoopback(testlib.MachineCase):
 
@@ -38,30 +38,17 @@ class TestLoopback(testlib.MachineCase):
         b.logout()
         b.wait_visible("#login")
 
-        self.restore_file("/usr/bin/cockpit-bridge")
-        m.execute("rm /usr/bin/cockpit-bridge")
-
-        b.set_val('#login-user-input', "admin")
-        b.set_val('#login-password-input', "foobar")
-        b.click('#login-button')
-        b.wait_visible('#login-fatal')
-        self.assertIn("no-cockpit", b.text('#login-fatal'))
-
         m.disconnect()
         self.restore_dir("/etc/ssh", restart_unit=self.sshd_service)
         m.execute("sed -i 's/.*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config $(ls /etc/ssh/sshd_config.d/* 2>/dev/null || true)")
         m.execute(self.restart_sshd)
         m.wait_execute()
 
-        b.reload()
-        b.wait_visible("#login")
         b.set_val('#login-user-input', "admin")
         b.set_val('#login-password-input', "foobar")
         b.click('#login-button')
-        b.wait_visible('#login-fatal')
-        self.assertIn(
-            "The server refused to authenticate 'admin' using password authentication, and no other supported authentication methods are available.",
-            b.text('#login-fatal'))
+        b.wait_text("#login-error-title", "Authentication failed")
+        b.wait_text('#login-error-message', "Wrong user name or password")
 
         self.allow_journal_messages("Cannot run program cockpit-bridge: No such file or directory",
                                     ".*server offered unsupported authentication methods: public-key.*")

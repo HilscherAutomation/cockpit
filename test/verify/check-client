@@ -20,9 +20,8 @@
 import testlib
 
 
-@testlib.skipImage("needs pybridge", "rhel-8*")
 # enable this once our cockpit/ws container can beiboot
-@testlib.skipOstree("client setup does not work with ws container")
+@testlib.skipWsContainer("client setup does not work with ws container")
 class TestClient(testlib.MachineCase):
 
     provision = {
@@ -37,15 +36,12 @@ class TestClient(testlib.MachineCase):
         self.m_target.execute("hostnamectl set-hostname target")
         # validate on-demand install: this does not work on arch, non-split package
         if self.m_target.image.startswith("debian") or self.m_target.image.startswith("ubuntu"):
-            self.m_target.execute("dpkg --purge cockpit-pcp-dbgsym || true; dpkg --purge cockpit-pcp pcp")
-        elif self.m_target.image != 'arch':
-            # TODO: remove conditional when all images have python3-pcp and a Python PCP bridge
+            self.m_target.execute("dpkg --purge pcp")
+        elif self.m_target.image == 'arch':
+            self.m_target.execute("pacman -Rdd --noconfirm pcp")
+        else:
             self.m_target.execute("""
-                if rpm -q python3-pcp; then
-                    rpm --erase --verbose cockpit-pcp pcp python3-pcp
-                else
-                    rpm --erase --verbose cockpit-pcp pcp
-                fi
+                rpm --erase --verbose pcp python3-pcp
                 systemctl daemon-reload
             """)
 
@@ -101,12 +97,12 @@ exec "$@"
     def testBeibootNoBridge(self):
         # set up target machine: no cockpit
         self.m_target.execute("rm /usr/bin/cockpit-bridge; rm -r /usr/share/cockpit")
-        self.checkLoginScenarios(local_bridge=False)
+        self.checkLoginScenarios()
 
     def testBeibootWithBridge(self):
-        self.checkLoginScenarios(local_bridge=True)
+        self.checkLoginScenarios()
 
-    def checkLoginScenarios(self, *, local_bridge=True):
+    def checkLoginScenarios(self):
         self.m_client.spawn(f"runuser -u admin -- {self.libexecdir}/cockpit-ws --no-tls", "ws.log")
         self.m_client.wait_for_cockpit_running()
 
@@ -143,21 +139,15 @@ exec "$@"
         self.check_login("admin@target")
         b.become_superuser()
 
-        # cockpit-pcp is installed on client, but not on target; recognize that
-        if self.m_target.image != 'arch':
-            b.go("/metrics")
-            b.enter_page("/metrics")
-            b.wait_in_text(".pf-v5-c-empty-state", "cockpit-pcp is missing")
-            if local_bridge:
-                # on-demand install is allowed
-                b.wait_in_text(".pf-v5-c-empty-state button.pf-m-primary", "Install cockpit-pcp")
-                b.click(".pf-v5-c-empty-state button.pf-m-primary")
-                b.wait_in_text(".pf-v5-c-modal-box", "cockpit-pcp will be installed")
-                b.click(".pf-v5-c-modal-box button.cancel")
-            else:
-                # not currently supported in beiboot scenario
-                b.wait_in_text(".pf-v5-c-empty-state", "Installation not supported without installed cockpit package")
-                b.wait_not_present(".pf-v5-c-empty-state button")
+        # python3-pcp is installed on client, but not on target; recognize that
+        b.go("/metrics")
+        b.enter_page("/metrics")
+        b.wait_in_text(".pf-v6-c-empty-state", "PCP is missing")
+        # on-demand install is allowed
+        b.wait_in_text(".pf-v6-c-empty-state button.pf-m-primary", "Install PCP support")
+        b.click(".pf-v6-c-empty-state button.pf-m-primary")
+        b.wait_in_text(".pf-v6-c-modal-box", "pcp will be installed")
+        b.click(".pf-v6-c-modal-box button.cancel")
 
         b.drop_superuser()
         self.logout()
@@ -168,7 +158,7 @@ exec "$@"
             b.wait_text("#conversation-prompt", "admin@10.111.113.2's password: ")
             b.set_val("#conversation-input", "wrong")
             b.click("#login-button")
-        b.wait_in_text("#login-error-message", "Authentication failed")
+        b.wait_in_text("#login-error-title", "Authentication failed")
         b.wait_val("#server-field", "10.111.113.2")
 
         # connect to most recent host
@@ -191,10 +181,10 @@ exec "$@"
 
         # not a sudoer
         b.open_superuser_dialog()
-        b.set_input_text(".pf-v5-c-modal-box:contains('Switch to administrative access') input", "barfoo")
-        b.click(".pf-v5-c-modal-box button:contains('Authenticate')")
-        b.click(".pf-v5-c-modal-box:contains('Problem becoming administrator') button:contains('Close')")
-        b.wait_not_present(".pf-v5-c-modal-box")
+        b.set_input_text(".pf-v6-c-modal-box:contains('Switch to administrative access') input", "barfoo")
+        b.click(".pf-v6-c-modal-box button:contains('Authenticate')")
+        b.click(".pf-v6-c-modal-box:contains('Problem becoming administrator') button:contains('Close')")
+        b.wait_not_present(".pf-v6-c-modal-box")
         b.check_superuser_indicator("Limited access")
 
         self.logout()
@@ -227,7 +217,8 @@ exec "$@"
         # unreachable host
         b.set_val("#server-field", "unknownhost")
         b.click("#login-button")
-        b.wait_in_text("#login-error-message", "Host is unknown")
+        b.wait_text("#login-error-title", "Refusing to connect")
+        b.wait_text("#login-error-message", "Host is unknown")
         b.wait_val("#server-field", "unknownhost")
         # does not appear in recent hosts
         b.wait_in_text("#recent-hosts-list", "10.111.113.2")

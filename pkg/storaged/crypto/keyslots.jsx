@@ -21,11 +21,11 @@ import cockpit from "cockpit";
 import React from "react";
 import client from "../client.js";
 
-import { CardBody, CardHeader, CardTitle } from '@patternfly/react-core/dist/esm/components/Card/index.js';
+import { CardHeader } from '@patternfly/react-core/dist/esm/components/Card/index.js';
 import { Checkbox } from "@patternfly/react-core/dist/esm/components/Checkbox/index.js";
 import { FormGroup } from "@patternfly/react-core/dist/esm/components/Form/index.js";
-import { DataList, DataListCell, DataListItem, DataListItemCells, DataListItemRow } from "@patternfly/react-core/dist/esm/components/DataList/index.js";
-import { Text, TextContent, TextList, TextListItem, TextVariants } from "@patternfly/react-core/dist/esm/components/Text/index.js";
+import { Table, Tbody, Tr, Td } from '@patternfly/react-table';
+import { Content, ContentVariants } from "@patternfly/react-core/dist/esm/components/Content/index.js";
 import { TextInput as TextInputPF } from "@patternfly/react-core/dist/esm/components/TextInput/index.js";
 import { Stack } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
 import { EditIcon, MinusIcon, PlusIcon } from "@patternfly/react-icons";
@@ -42,8 +42,9 @@ import {
     SelectOneRadio, TextInput, PassInput, Skip
 } from "../dialog.jsx";
 import {
-    decode_filename, encode_filename, get_block_mntopts, block_name, for_each_async, get_children,
-    parse_options, extract_option, unparse_options, edit_crypto_config
+    decode_filename, encode_filename, get_block_mntopts, block_name, for_each_async,
+    parse_options, extract_option, unparse_options, edit_crypto_config,
+    contains_rootfs,
 } from "../utils.js";
 import { StorageButton } from "../storage-controls.jsx";
 
@@ -387,24 +388,6 @@ function ensure_non_root_nbde_support(steps, progress, client, block) {
             .then(() => ensure_crypto_option(steps, progress, client, block, "_netdev"));
 }
 
-function contains_rootfs(client, path) {
-    const block = client.blocks[path];
-    const crypto = client.blocks_crypto[path];
-    let fsys_config = null;
-
-    if (block)
-        fsys_config = block.Configuration.find(c => c[0] == "fstab");
-    if (!fsys_config && crypto)
-        fsys_config = crypto.ChildConfiguration.find(c => c[0] == "fstab");
-
-    if (fsys_config) {
-        const dir = decode_filename(fsys_config[1].dir.v);
-        return dir == "/";
-    }
-
-    return get_children(client, path).some(p => contains_rootfs(client, p));
-}
-
 function ensure_nbde_support(steps, progress, client, block) {
     if (contains_rootfs(client, block.path)) {
         if (client.get_config("nbde_root_help", false)) {
@@ -420,20 +403,20 @@ function ensure_nbde_support_dialog(steps, client, block, url, adv, old_key, exi
     const dlg = dialog_open({
         Title: _("Add Network Bound Disk Encryption"),
         Body: (
-            <TextContent>
-                <Text component={TextVariants.p}>
+            <>
+                <Content component={ContentVariants.p}>
                     { steps.is_root
                         ? _("The system does not currently support unlocking the root filesystem with a Tang keyserver.")
                         : _("The system does not currently support unlocking a filesystem with a Tang keyserver during boot.")
                     }
-                </Text>
-                <Text component={TextVariants.p}>
+                </Content>
+                <Content component={ContentVariants.p}>
                     {_("These additional steps are necessary:")}
-                </Text>
-                <TextList>
-                    { steps.map((s, i) => <TextListItem key={i}>{s.title}</TextListItem>) }
-                </TextList>
-            </TextContent>),
+                </Content>
+                <Content component="ul">
+                    { steps.map((s, i) => <Content component="li" key={i}>{s.title}</Content>) }
+                </Content>
+            </>),
         Fields: existing_passphrase_fields(_("Saving a new passphrase requires unlocking the disk. Please provide a current disk passphrase.")),
         Action: {
             Title: _("Fix NBDE support"),
@@ -745,38 +728,26 @@ export class CryptoKeyslots extends React.Component {
 
             const add_row = (slot, type, desc, edit, edit_excuse, remove) => {
                 rows.push(
-                    <DataListItem key={slot}>
-                        <DataListItemRow>
-                            <DataListItemCells
-                                dataListCells={[
-                                    <DataListCell key="key-type">
-                                        { type }
-                                    </DataListCell>,
-                                    <DataListCell key="desc" isFilled={false}>
-                                        { desc }
-                                    </DataListCell>,
-                                    <DataListCell key="key-slot">
-                                        { cockpit.format(_("Slot $0"), slot) }
-                                    </DataListCell>,
-                                    <DataListCell key="text-right" isFilled={false} alignRight>
-                                        <StorageButton onClick={edit}
-                                                       ariaLabel={_("Edit")}
-                                                       excuse={(keys.length == max_slots)
-                                                           ? _("Editing a key requires a free slot")
-                                                           : null}>
-                                            <EditIcon />
-                                        </StorageButton>
-                                        { "\n" }
-                                        <StorageButton onClick={remove}
-                                                       ariaLabel={_("Remove")}
-                                                       excuse={keys.length == 1 ? _("The last key slot can not be removed") : null}>
-                                            <MinusIcon />
-                                        </StorageButton>
-                                    </DataListCell>,
-                                ]}
-                            />
-                        </DataListItemRow>
-                    </DataListItem>
+                    <Tr key={slot}>
+                        <Td>{type}</Td>
+                        <Td>{desc}</Td>
+                        <Td>{cockpit.format(_("Slot $0"), slot)}</Td>
+                        <Td modifier="nowrap" className="pf-v6-c-table__action">
+                            <StorageButton onClick={edit}
+                                ariaLabel={_("Edit")}
+                                excuse={(keys.length == max_slots)
+                                    ? _("Editing a key requires a free slot")
+                                    : null}>
+                                <EditIcon />
+                            </StorageButton>
+                            { "\n" }
+                            <StorageButton onClick={remove}
+                                ariaLabel={_("Remove")}
+                                excuse={keys.length == 1 ? _("The last key slot can not be removed") : null}>
+                                <MinusIcon />
+                            </StorageButton>
+                        </Td>
+                    </Tr>
                 );
             };
 
@@ -799,9 +770,13 @@ export class CryptoKeyslots extends React.Component {
                 }
             });
 
-            table = <DataList isCompact className="crypto-keyslots-list" aria-label={_("Keys")}>
-                {rows}
-            </DataList>;
+            table = (
+                <Table id="encryption-keys" aria-label={_("Keys")}>
+                    <Tbody>
+                        {rows}
+                    </Tbody>
+                </Table>
+            );
         }
 
         const remaining = max_slots - keys.length;
@@ -822,11 +797,9 @@ export class CryptoKeyslots extends React.Component {
                         </StorageButton>
                     </>,
                 }}>
-                    <CardTitle component="h2">{_("Keys")}</CardTitle>
+                    <strong>{_("Keys")}</strong>
                 </CardHeader>
-                <CardBody id="encryption-keys" className="contains-list">
-                    {table}
-                </CardBody>
+                {table}
             </>
         );
     }

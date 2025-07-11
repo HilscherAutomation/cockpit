@@ -17,21 +17,21 @@
  * along with Cockpit; If not, see <https://www.gnu.org/licenses/>.
  */
 
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
 import 'polyfills'; // once per application
 import 'cockpit-dark-theme'; // once per page
 
 import React, { useState, useEffect, useCallback } from "react";
 import { createRoot } from 'react-dom/client';
 import { Flex, FlexItem } from "@patternfly/react-core/dist/esm/layouts/Flex/index.js";
-import { Select, SelectOption } from "@patternfly/react-core/dist/esm/deprecated/components/Select/index.js";
-import { Page, PageSection, PageSectionVariants } from "@patternfly/react-core/dist/esm/components/Page/index.js";
-import { Card } from "@patternfly/react-core/dist/esm/components/Card/index.js";
+import { Page, PageSection, } from "@patternfly/react-core/dist/esm/components/Page/index.js";
+import { Card, CardHeader } from "@patternfly/react-core/dist/esm/components/Card/index.js";
 import { SearchInput } from "@patternfly/react-core/dist/esm/components/SearchInput/index.js";
 import { ToggleGroup, ToggleGroupItem } from "@patternfly/react-core/dist/esm/components/ToggleGroup/index.js";
 import { Toolbar, ToolbarContent, ToolbarFilter, ToolbarItem, ToolbarToggleGroup } from "@patternfly/react-core/dist/esm/components/Toolbar/index.js";
 import { ExclamationCircleIcon, FilterIcon } from '@patternfly/react-icons';
 
+import { CheckboxSelect } from "cockpit-components-checkbox-select";
 import { EmptyStatePanel } from "cockpit-components-empty-state.jsx";
 import { Service } from "./service.jsx";
 import { ServiceTabs, service_tabs_suffixes } from "./service-tabs.jsx";
@@ -182,6 +182,7 @@ class ServicesPageBody extends React.Component {
             /* State related to the toolbar components */
             isFullyLoaded: false,
             error: null,
+            pinnedUnits: [],
         };
 
         /* data storage
@@ -239,7 +240,7 @@ class ServicesPageBody extends React.Component {
         };
 
         // Possible UnitFileState values: enabled, enabled-runtime, linked, linked-runtime, alias, masked, masked-runtime, static, disabled, invalid, indirect, generated, transient, bad
-        // See: typedef enum UnitFileState https://github.com/systemd/systemd/blob/main/src/basic/unit-file.h
+        // See: typedef enum UnitFileState https://github.com/systemd/systemd/blob/main/src/shared/unit-file.h
         this.unitFileState = {
             enabled: _("Enabled"),
             "enabled-runtime": _("Enabled"),
@@ -483,7 +484,7 @@ class ServicesPageBody extends React.Component {
                     const unit_files = {};
                     unitFilesResults.forEach(([UnitFilePath, UnitFileState]) => {
                         const Id = UnitFilePath.split('/').pop();
-                        if (!this.isUnitHandled(Id) | this.isTemplate(Id))
+                        if (!this.isUnitHandled(Id) || this.isTemplate(Id))
                             return;
 
                         this.seenUnitFileStates.add(UnitFileState);
@@ -585,7 +586,7 @@ class ServicesPageBody extends React.Component {
 
         Object.values(this.units).forEach(u => {
             if (u.ActiveState == "failed" && u.LoadState != "not-found") {
-                const suffix = u.Id.substr(u.Id.lastIndexOf('.') + 1);
+                const suffix = u.Id.substring(u.Id.lastIndexOf('.') + 1);
                 if (service_tabs_suffixes.includes(suffix)) {
                     tabErrors[suffix] = true;
                     failed.add(u.Id);
@@ -704,15 +705,17 @@ class ServicesPageBody extends React.Component {
         const activeTab = this.props.activeTab;
 
         return (
-            <PageSection>
-                <Card isCompact>
-                    <ServicesPageFilters activeStateDropdownOptions={activeStateDropdownOptions}
-                                         fileStateDropdownOptions={fileStateDropdownOptions}
-                                         filtersRef={this.filtersRef}
-                                         loadingUnits={this.props.isLoading}
-                                         options={cockpit.location.options}
-                                         onOptionsChanged={this.onOptionsChanged}
-                    />
+            <PageSection hasBodyWrapper={false}>
+                <Card isPlain isCompact>
+                    <CardHeader id='services-card-header'>
+                        <ServicesPageFilters activeStateDropdownOptions={activeStateDropdownOptions}
+                                            fileStateDropdownOptions={fileStateDropdownOptions}
+                                            filtersRef={this.filtersRef}
+                                            loadingUnits={this.props.isLoading}
+                                            options={cockpit.location.options}
+                                            onOptionsChanged={this.onOptionsChanged}
+                        />
+                    </CardHeader>
                     <ServicesList key={cockpit.format("$0-list", activeTab)}
                                   isTimer={activeTab == 'timer'}
                                   filtersRef={this.filtersRef}
@@ -732,9 +735,7 @@ const ServicesPageFilters = ({
     onOptionsChanged,
 }) => {
     const { activestate, filestate, name } = options;
-    const [activeStateFilterIsOpen, setActiveStateFilterIsOpen] = useState(false);
     const [currentTextFilter, setCurrentTextFilter] = useState(decodeURIComponent(name || ""));
-    const [fileStateFilterIsOpen, setFileStateFilterIsOpen] = useState(false);
     const [filters, setFilters] = useState({
         activeState: JSON.parse(activestate || '[]'),
         fileState: JSON.parse(filestate || '[]'),
@@ -757,18 +758,16 @@ const ServicesPageFilters = ({
         onOptionsChanged(_options);
     }, [filters, currentTextFilter, onOptionsChanged]);
 
-    const onSelect = (type, event, selection) => {
-        const checked = event.target.checked;
-
+    const onSelect = (type, checked, selection) => {
         setFilters({ ...filters, [type]: checked ? [...filters[type], selection] : filters[type].filter(value => value !== selection) });
     };
 
-    const onActiveStateSelect = (event, selection) => {
-        onSelect('activeState', event, selection);
+    const onActiveStateSelect = (selection, checked) => {
+        onSelect('activeState', checked, selection);
     };
 
-    const onFileStateSelect = (event, selection) => {
-        onSelect('fileState', event, selection);
+    const onFileStateSelect = (selection, checked) => {
+        onSelect('fileState', checked, selection);
     };
 
     const getFilterLabelKey = (typeLabel) => {
@@ -794,7 +793,13 @@ const ServicesPageFilters = ({
     const onDeleteChipGroup = (typeLabel) => {
         const type = getFilterLabelKey(typeLabel);
 
-        setFilters({ ...filters, [type]: [] });
+        if (type)
+            setFilters({ ...filters, [type]: [] });
+        else
+            setFilters({
+                activeState: [],
+                fileState: []
+            });
     };
 
     const onClearAllFilters = useCallback(() => {
@@ -812,9 +817,9 @@ const ServicesPageFilters = ({
     }, [filtersRef, onClearAllFilters]);
 
     const toolbarItems =
-        <ToolbarToggleGroup toggleIcon={<><span className="pf-v5-c-button__icon pf-m-start"><FilterIcon /></span>{_("Toggle filters")}</>} breakpoint="sm"
-                            variant="filter-group" alignment={{ default: 'alignLeft' }}>
-            <ToolbarItem variant="search-filter">
+        <ToolbarToggleGroup toggleIcon={<><span className="pf-v6-c-button__icon pf-m-start"><FilterIcon /></span>{_("Toggle filters")}</>} breakpoint="sm"
+                            variant="filter-group">
+            <ToolbarItem>
                 <SearchInput id="services-text-filter"
                              className="services-text-filter"
                              placeholder={_("Filter by name or description")}
@@ -822,46 +827,53 @@ const ServicesPageFilters = ({
                              onChange={(_, val) => onTextFilterChanged(val)}
                              onClear={() => onTextFilterChanged('')} />
             </ToolbarItem>
-            <ToolbarFilter chips={filters.activeState}
-                           deleteChip={onDeleteChip}
-                           deleteChipGroup={onDeleteChipGroup}
+            <ToolbarFilter labels={filters.activeState}
+                           deleteLabel={onDeleteChip}
+                           deleteLabelGroup={onDeleteChipGroup}
                            categoryName={_("Active state")}>
-                <Select aria-label={_("Active state")}
-                        toggleId="services-dropdown-active-state"
-                        variant="checkbox"
-                        onToggle={(_, isOpen) => setActiveStateFilterIsOpen(isOpen)}
-                        onSelect={onActiveStateSelect}
-                        selections={filters.activeState}
-                        isOpen={activeStateFilterIsOpen}
-                        placeholderText={_("Active state")}>
-                    {activeStateDropdownOptions.map(option => <SelectOption key={option.value}
-                                                                            value={option.label} />)}
-                </Select>
+                <CheckboxSelect
+                    toggleProps={{
+                        id: "services-dropdown-active-state",
+                        "aria-label": _("Active state")
+                    }}
+                    toggleContent={_("Active state")}
+                    onSelect={onActiveStateSelect}
+                    selected={filters.activeState}
+                    options={activeStateDropdownOptions.map(option => {
+                        return {
+                            value: option.label, // sic
+                            content: option.label,
+                        };
+                    })} />
             </ToolbarFilter>
-            <ToolbarFilter chips={filters.fileState}
-                           deleteChip={onDeleteChip}
-                           deleteChipGroup={onDeleteChipGroup}
+            <ToolbarFilter labels={filters.fileState}
+                           deleteLabel={onDeleteChip}
+                           deleteLabelGroup={onDeleteChipGroup}
                            categoryName={_("File state")}>
-                <Select aria-label={_("File state")}
-                        toggleId="services-dropdown-file-state"
-                        variant="checkbox"
-                        onToggle={(_, isOpen) => setFileStateFilterIsOpen(isOpen)}
-                        onSelect={onFileStateSelect}
-                        selections={filters.fileState}
-                        isOpen={fileStateFilterIsOpen}
-                        placeholderText={_("File state")}>
-                    {fileStateDropdownOptions.map(option => <SelectOption key={option.value}
-                                                                          value={option.label} />)}
-                </Select>
+                <CheckboxSelect
+                    toggleProps={{
+                        id: "services-dropdown-file-state",
+                        "aria-label": _("File state")
+                    }}
+                    toggleContent={_("File state")}
+                    onSelect={onFileStateSelect}
+                    selected={filters.fileState}
+                    options={fileStateDropdownOptions.map(option => {
+                        return {
+                            value: option.label, // sic
+                            content: option.label,
+                        };
+                    })} />
             </ToolbarFilter>
         </ToolbarToggleGroup>;
 
     return (
-        <Toolbar data-loading={loadingUnits}
+        <Toolbar
+                data-loading={loadingUnits}
                  clearAllFilters={onClearAllFilters}
                  className="pf-m-sticky-top ct-compact services-toolbar"
                  id="services-toolbar"
-                 numberOfFiltersText={n => cockpit.format("$0 filters applied")}>
+                 numberOfFiltersText={n => cockpit.format(_("$0 filters applied"), n)}>
             <ToolbarContent>{toolbarItems}</ToolbarContent>
         </Toolbar>
     );
@@ -896,9 +908,9 @@ const ServicesPage = () => {
 
     return (
         <WithDialogs>
-            <Page>
+            <Page className='no-masthead-sidebar'>
                 {cockpit.location.path.length == 0 &&
-                <PageSection variant={PageSectionVariants.light} type="nav" className="services-header">
+                <PageSection hasBodyWrapper={false} className="services-header">
                     <Flex>
                         <ServiceTabs activeTab={activeTab}
                                       tabErrors={tabErrors}

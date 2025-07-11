@@ -14,6 +14,7 @@ if [ -d /host ]; then
     set +x
 
     /bin/mount --bind /host/usr/share/pixmaps /usr/share/pixmaps
+    /bin/mount --bind /host/usr/share/icons /usr/share/icons
     /bin/mount --bind /host/var /var
     /bin/mount --bind /host/etc/ssh /etc/ssh
 
@@ -41,6 +42,8 @@ else
 
     /usr/libexec/cockpit-certificate-ensure
 
-    eval $(ssh-agent)
+    # start SSH agent, unless we already got pointed to one
+    [ -n "${SSH_AUTH_SOCK:-}" ] || eval "$(ssh-agent)"
+
     exec /usr/libexec/cockpit-ws --local-ssh "$@"
 fi

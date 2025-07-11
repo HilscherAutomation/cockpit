@@ -120,7 +120,7 @@ class TestStorageAnaconda(storagelib.StorageCase):
 
         b.click(self.card_button("ext4 filesystem", "Unmount"))
         self.dialog_wait_open()
-        b.wait_text("#dialog .pf-v5-c-modal-box__title-text", "Unmount filesystem /var")
+        b.wait_text("#dialog .pf-v6-c-modal-box__title-text", "Unmount filesystem /var")
         self.dialog_apply()
         self.dialog_wait_close()
         self.assertIn("noauto", m.execute("findmnt --fstab -n -o OPTIONS /sysroot/var"))
@@ -146,13 +146,21 @@ class TestStorageAnaconda(storagelib.StorageCase):
                                       }
                                   })
 
-        # Activate and mount again, to check location in tear down information
+        # Activate
         b.click(self.card_button("Inactive logical volume", "Activate"))
-        b.click(self.card_button("Filesystem", "Mount"))
+
+        # Crypto is locked.  Unlock and mount via the "Reuse existing
+        # encryption" mode of the Format dialog
+        self.click_card_dropdown("Filesystem", "Format")
         self.dialog_wait_open()
-        self.dialog_set_val("passphrase", "vainu-reku-toma-rolle-kaja")
+        self.dialog_wait_val("crypto", " keep")
+        self.dialog_set_val("old_passphrase", "vainu-reku-toma-rolle-kaja")
+        b.set_checked("#dialog-confirm", val=True)
         self.dialog_apply()
         self.dialog_wait_close()
+
+        # Passphrase should still be remembered
+        self.expectExportedDevicePassphrase("/dev/vgroup0/lvol0", "vainu-reku-toma-rolle-kaja")
 
         # Check and delete volume group
         b.click(self.card_parent_link())
@@ -166,7 +174,8 @@ class TestStorageAnaconda(storagelib.StorageCase):
         b.wait(lambda: b.call_js_func('ph_count', self.card("Storage") + " tbody tr") == 1)
         b.wait_not_present(self.card_row("Storage", location="/var"))
 
-    @testlib.skipImage("No Stratis", "debian-*", "ubuntu-*")
+    @testlib.skipImage("No Stratis", "debian-*", "ubuntu-*", "arch")
+    @testlib.skipImage("commit 817c957899a4 removed Statis 2 support", "rhel-8-*")
     def testStratis(self):
         m = self.machine
         b = self.browser
@@ -228,7 +237,7 @@ class TestStorageAnaconda(storagelib.StorageCase):
 
         b.click(self.card_button("Stratis filesystem", "Unmount"))
         self.dialog_wait_open()
-        b.wait_text("#dialog .pf-v5-c-modal-box__title-text", "Unmount filesystem /var")
+        b.wait_text("#dialog .pf-v6-c-modal-box__title-text", "Unmount filesystem /var")
         self.dialog_apply()
         self.dialog_wait_close()
         self.assertIn("noauto", m.execute("findmnt --fstab -n -o OPTIONS /sysroot/var"))
@@ -283,11 +292,6 @@ class TestStorageAnaconda(storagelib.StorageCase):
         self.dialog_apply()
         self.dialog_wait_close()
 
-        # Mount so that we can create subvolumes
-        b.wait_text(self.card_row_col("Storage", 1, 3), "btrfs filesystem (encrypted)")
-        self.click_dropdown(self.card_row("Storage", location="/mnt/butter"), "Mount")
-        self.dialog({})
-
         # Create two subvolumes
         self.click_dropdown(self.card_row("Storage", location="/mnt/butter"), "Create subvolume")
         self.dialog_wait_open()
@@ -306,11 +310,10 @@ class TestStorageAnaconda(storagelib.StorageCase):
         self.dialog_apply()
         self.dialog_wait_close()
 
-        # Unmount and lock, mount point exporting should still work
+        # Lock, mount point exporting should still work
 
-        self.click_dropdown(self.card_row("Storage", location="/mnt/butter"), "Unmount")
-        self.dialog({})
         self.click_dropdown(self.card_row("Storage", name=disk), "Lock")
+        self.confirm()
         b.wait_text(self.card_row_col("Storage", 1, 3), "Locked data (encrypted)")
 
         self.expectExportedDevice(disk,
@@ -331,6 +334,30 @@ class TestStorageAnaconda(storagelib.StorageCase):
                                           }
                                       }
                                   })
+
+    @testlib.skipImage('no btrfs support', 'rhel-*', 'centos-*')
+    def testDegradedBtrfs(self):
+        b = self.browser
+        m = self.machine
+
+        disk1 = self.add_ram_disk(size=140)
+        disk2 = self.add_loopback_disk(size=140)
+
+        anaconda_config = {
+            "mount_point_prefix": "/sysroot",
+            "available_devices": [disk1, disk2],
+        }
+
+        # Create a two-device btrfs and then degrade it by wiping the second device.
+        # Cockpit used to crash when such a filesystem is present in Anaconda mode.
+
+        m.execute(f"mkfs.btrfs -L butter {disk1} {disk2}")
+        m.execute(f"wipefs -a {disk2}")
+
+        self.login_and_go("/storage")
+        self.enterAnacondaMode(anaconda_config)
+
+        b.wait_visible(self.card_row("Storage", name="butter"))
 
     def testBiosboot(self):
         b = self.browser
@@ -660,8 +687,8 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
         self.enterAnacondaMode(anaconda_config)
 
         dropdown_toggle = self.dropdown_toggle(self.card_header("Storage"))
-        raid_action = self.dropdown_action(self.card_header("Storage"), "Create MDRAID device")
-        stratis_action = self.dropdown_action(self.card_header("Storage"), "Create Stratis pool")
+        raid_action = self.dropdown_action("Create MDRAID device")
+        stratis_action = self.dropdown_action("Create Stratis pool")
         b.click(dropdown_toggle)
         b.wait_visible(raid_action)
         b.wait_not_present(stratis_action)
