@@ -304,6 +304,7 @@ body {
     min-width: auto !important;
     display: none !important;
   }
+
   .pf-v6-c-masthead__content {
     background-image: url("HIL_netFIELD-LOCAL_Logo_Black.svg");
     background-size: 180px auto;
@@ -311,7 +312,6 @@ body {
     background-position: left;
     margin-left: 1rem;
   }
-
 }
 
 #topnav {
