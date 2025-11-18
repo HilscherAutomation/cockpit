@@ -24,6 +24,12 @@ from .packages import PackagesChannel
 from .pcp import PcpMetricsChannel
 from .stream import SocketStreamChannel, SubprocessStreamChannel
 from .trivial import EchoChannel, NullChannel
+try:
+    from .websocket_stream1 import WebSocketStream1
+except Exception as exc:
+    WebSocketStream1 = None
+    import logging
+    logging.getLogger(__name__).info("websocket-stream1 disabled: %s", exc)
 
 CHANNEL_TYPES = [
     DBusChannel,
@@ -42,3 +48,6 @@ CHANNEL_TYPES = [
     SubprocessStreamChannel,
     SocketStreamChannel,
 ]
+
+if WebSocketStream1 is not None:
+    CHANNEL_TYPES.append(WebSocketStream1)
