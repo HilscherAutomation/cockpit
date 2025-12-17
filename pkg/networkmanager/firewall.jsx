@@ -1184,7 +1184,6 @@ export class Firewall extends React.Component {
             body = _("This zone contains the cockpit service. Make sure that this zone does not apply to your current web console connection.");
         else
             body = _("Removing the zone will remove all services within it.");
-
         Dialogs.show(<DeleteConfirmationModal title={ cockpit.format(_("Remove zone $0"), zone) }
                                               body={body}
                                               target={zone}
