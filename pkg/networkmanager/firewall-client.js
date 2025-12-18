@@ -594,27 +594,33 @@ firewall.addForwardPort = (zone, forward) => {
     return firewalld_dbus.call('/org/fedoraproject/FirewallD1',
                                'org.fedoraproject.FirewallD1.zone',
                                'addForwardPort', args)
-            // Then add to permanent configuration
-            .then(() => firewalld_dbus.call('/org/fedoraproject/FirewallD1/config',
-                                           'org.fedoraproject.FirewallD1.config',
-                                           'getZoneByName', [zone]))
-            .then(path => {
-                // Subscribe to zone update signal
-                const subscription = firewalld_dbus.subscribe({
-                    interface: 'org.fedoraproject.FirewallD1.config.zone',
-                    path: path[0],
-                    member: 'Updated'
-                }, () => {
-                    getZones().then(() => getServices());
-                    subscription.remove();
-                });
+        // Then add to permanent configuration using update2
+        .then(() => firewalld_dbus.call('/org/fedoraproject/FirewallD1/config',
+                                        'org.fedoraproject.FirewallD1.config',
+                                        'getZoneByName', [zone]))
+        .then(path => {
+            // Get current settings
+            return firewalld_dbus.call(path[0],
+                                       'org.fedoraproject.FirewallD1.config.zone',
+                                       'getSettings2', []);
+        })
+        .then(([settings, ..._]) => {
+            // Prepare new forward_ports array
+            const existing = (settings.forward_ports && settings.forward_ports.v) || [];
+            const newForward = [forward.port, forward.protocol, forward.to_port || '', forward.to_addr || ''];
+            // Avoid duplicates
+            const updated = existing.filter(fp =>
+                !(fp[0] === newForward[0] && fp[1] === newForward[1] && fp[2] === newForward[2] && fp[3] === newForward[3])
+            );
+            updated.push(newForward);
 
-                // Add forward port to permanent config
-                return firewalld_dbus.call(path[0],
-                                          'org.fedoraproject.FirewallD1.config.zone',
-                                          'addForwardPort', [forward.port, forward.protocol, forward.to_port || '', forward.to_addr || '']);
-            })
-            .then(() => getZones());
+            // Update permanent config
+            return firewalld_dbus.call(settings.path,
+                'org.fedoraproject.FirewallD1.config.zone',
+                'update2', [{ forward_ports: { t: 'a(ssss)', v: updated } }]
+            );
+        })
+        .then(() => getZones());
 };
 
 firewall.removeForwardPort = (zone, forward) => {
@@ -624,27 +630,31 @@ firewall.removeForwardPort = (zone, forward) => {
     return firewalld_dbus.call('/org/fedoraproject/FirewallD1',
                                'org.fedoraproject.FirewallD1.zone',
                                'removeForwardPort', args)
-            // Then remove from permanent configuration
-            .then(() => firewalld_dbus.call('/org/fedoraproject/FirewallD1/config',
-                                           'org.fedoraproject.FirewallD1.config',
-                                           'getZoneByName', [zone]))
-            .then(path => {
-                // Subscribe to zone update signal
-                const subscription = firewalld_dbus.subscribe({
-                    interface: 'org.fedoraproject.FirewallD1.config.zone',
-                    path: path[0],
-                    member: 'Updated'
-                }, () => {
-                    getZones().then(() => getServices());
-                    subscription.remove();
-                });
+        // Then remove from permanent configuration using update2
+        .then(() => firewalld_dbus.call('/org/fedoraproject/FirewallD1/config',
+                                        'org.fedoraproject.FirewallD1.config',
+                                        'getZoneByName', [zone]))
+        .then(path => {
+            // Get current settings
+            return firewalld_dbus.call(path[0],
+                                       'org.fedoraproject.FirewallD1.config.zone',
+                                       'getSettings2', []);
+        })
+        .then(([settings, ..._]) => {
+            // Prepare new forward_ports array
+            const existing = (settings.forward_ports && settings.forward_ports.v) || [];
+            const toRemove = [forward.port, forward.protocol, forward.to_port || '', forward.to_addr || ''];
+            const updated = existing.filter(fp =>
+                !(fp[0] === toRemove[0] && fp[1] === toRemove[1] && fp[2] === toRemove[2] && fp[3] === toRemove[3])
+            );
 
-                // Remove forward port from permanent config
-                return firewalld_dbus.call(path[0],
-                                          'org.fedoraproject.FirewallD1.config.zone',
-                                          'removeForwardPort', [forward.port, forward.protocol, forward.to_port || '', forward.to_addr || '']);
-            })
-            .then(() => getZones());
+            // Update permanent config
+            return firewalld_dbus.call(settings.path,
+                'org.fedoraproject.FirewallD1.config.zone',
+                'update2', [{ forward_ports: { t: 'a(ssss)', v: updated } }]
+            );
+        })
+        .then(() => getZones());
 };
 
 export default firewall;
