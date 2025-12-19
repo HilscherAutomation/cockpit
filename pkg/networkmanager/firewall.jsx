@@ -172,6 +172,167 @@ function portRow(props) {
     });
 }
 
+function portForwardRow(props) {
+    function onRemove(event) {
+        props.onRemoveForward(props.forward);
+        event.stopPropagation();
+    }
+
+    const deleteButton = !props.readonly && (
+        <DeleteDropdown
+            items={[{
+                text: _("Delete"),
+                danger: true,
+                ariaLabel: cockpit.format(_("Remove port forward $0"), props.forward.port),
+                handleClick: onRemove
+            }]}
+            id={`dropdown-forward-${props.forward.port}-${props.forward.protocol}`}
+        />
+    );
+
+    const destination = props.forward.to_addr
+        ? `${props.forward.to_addr}:${props.forward.to_port || props.forward.port}`
+        : _("Local");
+
+    return {
+        props: { key: props.forward.port + "-" + props.forward.protocol },
+        columns: [
+            { title: props.forward.protocol.toUpperCase() },
+            { title: props.forward.port },
+            { title: destination },
+            { title: props.forward.to_port || props.forward.port },
+            { title: deleteButton, props: { className: "pf-v6-c-table__action" } }
+        ]
+    };
+}
+
+class AddPortForwardModal extends React.Component {
+    static contextType = DialogsContext;
+
+    constructor(props) {
+        super(props);
+        this.state = {
+            protocol: "tcp",
+            sourcePort: "",
+            destinationAddr: "",
+            destinationPort: "",
+            dialogError: null,
+            dialogErrorDetail: null,
+        };
+        this.save = this.save.bind(this);
+    }
+
+    save(event) {
+        const Dialogs = this.context;
+
+        // Ensure all values are strings, never null or undefined
+        const forward = {
+            port: String(this.state.sourcePort || ''),
+            protocol: String(this.state.protocol || 'tcp'),
+            to_addr: String(this.state.destinationAddr || ''),
+            to_port: String(this.state.destinationPort || ''),
+        };
+
+        firewall.addForwardPort(this.props.zoneId, forward)
+                .then(() => {
+                    if (this.props.onSuccess) {
+                        this.props.onSuccess(forward);
+                    }
+                    Dialogs.close();
+                })
+                .catch(error => {
+                    this.setState({
+                        dialogError: _("Failed to add port forward"),
+                        dialogErrorDetail: error.name + ": " + error.message,
+                    });
+                });
+
+        if (event)
+            event.preventDefault();
+        return false;
+    }
+
+    render() {
+        const Dialogs = this.context;
+        const titleText = cockpit.format(_("Add port forward to $0 zone"), this.props.zoneName);
+
+        return (
+            <Modal id="add-port-forward-dialog" isOpen
+                   position="top" variant="medium"
+                   onClose={Dialogs.close}
+            >
+                <ModalHeader title={titleText} />
+                <ModalBody>
+                    <Form isHorizontal onSubmit={this.save}>
+                        {this.state.dialogError &&
+                            <ModalError dialogError={this.state.dialogError}
+                                       dialogErrorDetail={this.state.dialogErrorDetail} />
+                        }
+
+                        <FormGroup label={_("Protocol")} isRequired>
+                            <Radio name="protocol"
+                                   id="forward-protocol-tcp"
+                                   value="tcp"
+                                   isChecked={this.state.protocol === "tcp"}
+                                   onChange={(event) => this.setState({ protocol: event.target.value })}
+                                   label="TCP" />
+                            <Radio name="protocol"
+                                   id="forward-protocol-udp"
+                                   value="udp"
+                                   isChecked={this.state.protocol === "udp"}
+                                   onChange={(event) => this.setState({ protocol: event.target.value })}
+                                   label="UDP" />
+                        </FormGroup>
+
+                        <FormGroup label={_("Source port")} isRequired>
+                            <TextInput
+                                id="source-port"
+                                type="text"
+                                value={this.state.sourcePort}
+                                onChange={(_event, value) => this.setState({ sourcePort: value })}
+                                placeholder={_("Port number")}
+                            />
+                        </FormGroup>
+
+                        <FormGroup label={_("Destination address")} isRequired>
+                            <TextInput
+                                id="destination-addr"
+                                type="text"
+                                value={this.state.destinationAddr}
+                                onChange={(_event, value) => this.setState({ destinationAddr: value })}
+                                placeholder={_("IP address")}
+                            />
+                        </FormGroup>
+
+                        <FormGroup label={_("Destination port")} isRequired>
+                            <TextInput
+                                id="destination-port"
+                                type="text"
+                                value={this.state.destinationPort}
+                                onChange={(_event, value) => this.setState({ destinationPort: value })}
+                                placeholder={_("Port number")}
+                            />
+                        </FormGroup>
+                    </Form>
+                </ModalBody>
+                <ModalFooter>
+                    <Button variant='primary'
+                            onClick={this.save}
+                            isDisabled={!this.state.sourcePort ||
+                                        !this.state.destinationAddr ||
+                                        !this.state.destinationPort}
+                            aria-label={titleText}>
+                        {_("Add port forward")}
+                    </Button>
+                    <Button variant='link' className='btn-cancel' onClick={Dialogs.close}>
+                        {_("Cancel")}
+                    </Button>
+                </ModalFooter>
+            </Modal>
+        );
+    }
+}
+
 function ZoneSection(props) {
     function onRemoveZone(event) {
         event.stopPropagation();
@@ -185,11 +346,21 @@ function ZoneSection(props) {
         </Button>
     );
 
-    const actions = !firewall.readonly && <div className="zone-section-buttons">{addServiceAction}{deleteButton}</div>;
+    const addPortForwardAction = (
+        <Button variant="primary" onClick={() => props.openPortForwardDialog(props.zone.id, props.zone.id)} className="add-port-forward-button" aria-label={cockpit.format(_("Add port forward to zone $0"), props.zone.id)}>
+            {_("Add port forward")}
+        </Button>
+    );
+
+    const onRemoveForward = (forward) => {
+        props.onRemoveForward(props.zone.id, forward);
+    };
+
+    const actions = !firewall.readonly && <Flex spaceItems={{ default: 'spaceItemsMd' }}>{addServiceAction}{addPortForwardAction}{deleteButton}</Flex>;
 
     return <Card isPlain className="zone-section" data-id={props.zone.id}>
         <CardHeader actions={{ actions }} className="zone-section-heading">
-            <Flex alignItems={{ default: 'alignSelfBaseline' }} spaceItems={{ default: 'spaceItemsXl' }}>
+            <Flex alignItems={{ default: 'alignItemsCenter' }} spaceItems={{ default: 'spaceItemsXl' }}>
                 <CardTitle component="h2">
                     { cockpit.format(_("$0 zone"), upperCaseFirstLetter(props.zone.name || props.zone.id)) }
                 </CardTitle>
@@ -207,6 +378,7 @@ function ZoneSection(props) {
         </CardHeader>
         {(props.zone.services.length > 0 || props.zone.ports.length > 0) &&
         <CardBody className="contains-list">
+            <Title headingLevel="h3" size="lg">{_("Services")}</Title>
             <ListingTable columns={[{ title: _("Service"), props: { width: 40 } }, { title: _("TCP"), props: { width: 30 } }, { title: _("UDP"), props: { width: 30 } }, { title: "", props: { width: 10 } }]}
                           id={props.zone.id}
                           aria-label={props.zone.id}
@@ -237,6 +409,35 @@ function ZoneSection(props) {
 
             />
         </CardBody>}
+
+        {/* Port Forwarding Section - only show if there are port forwards */}
+        {props.zone.forward_ports && props.zone.forward_ports.length > 0 &&
+        <CardBody className="contains-list">
+            <Title headingLevel="h3" size="lg" className="port-forward-title">{_("Port forwarding")}</Title>
+            <ListingTable
+                columns={[
+                    { title: _("Protocol"), props: { width: 15 } },
+                    { title: _("Source port"), props: { width: 20 } },
+                    { title: _("Destination"), props: { width: 35 } },
+                    { title: _("Destination port"), props: { width: 20 } },
+                    { title: "", props: { width: 10 } }
+                ]}
+                id={props.zone.id + "-forward-ports"}
+                aria-label={_("Port forwards")}
+                variant="compact"
+                emptyCaption={_("No port forwards")}
+                rows={
+                    props.zone.forward_ports.map(f =>
+                        portForwardRow({
+                            key: f.port + "-" + f.protocol,
+                            forward: f,
+                            onRemoveForward,
+                            readonly: firewall.readonly
+                        })
+                    )
+                }
+            />
+    </CardBody>}
     </Card>;
 }
 
@@ -942,10 +1143,29 @@ export class Firewall extends React.Component {
 
         this.onFirewallChanged = this.onFirewallChanged.bind(this);
         this.openServicesDialog = this.openServicesDialog.bind(this);
+        this.openPortForwardDialog = this.openPortForwardDialog.bind(this);
         this.openAddZoneDialog = this.openAddZoneDialog.bind(this);
         this.onRemoveZone = this.onRemoveZone.bind(this);
         this.onRemoveService = this.onRemoveService.bind(this);
         this.onEditService = this.onEditService.bind(this);
+        this.onRemoveForward = this.onRemoveForward.bind(this);
+    }
+
+    onRemoveForward(zone, forward) {
+        const Dialogs = this.context;
+
+        Dialogs.show(<DeleteConfirmationModal
+            title={_("Remove port forward")}
+            body={cockpit.format(_("Remove port forward from $0 to $1?"),
+                                forward.port + "/" + forward.protocol,
+                                (forward.to_addr || "local") + ":" + (forward.to_port || forward.port))}
+            target={forward.port}
+            onCancel={Dialogs.close}
+            onDelete={() => {
+                firewall.removeForwardPort(zone, forward);
+                Dialogs.close();
+            }}
+        />);
     }
 
     onFirewallChanged() {
@@ -1029,6 +1249,11 @@ export class Firewall extends React.Component {
         Dialogs.show(<ActivateZoneModal />);
     }
 
+    openPortForwardDialog(zoneId, zoneName) {
+        const Dialogs = this.context;
+        Dialogs.show(<AddPortForwardModal zoneId={zoneId} zoneName={zoneName} />);
+    }
+
     render() {
         function go_up(event) {
             cockpit.jump("/network", cockpit.transport.host);
@@ -1082,9 +1307,11 @@ export class Firewall extends React.Component {
                             zones.map(z => <ZoneSection key={z.id}
                                                         zone={z}
                                                         openServicesDialog={this.openServicesDialog}
+                                                        openPortForwardDialog={this.openPortForwardDialog}
                                                         readonly={this.state.firewall.readonly}
                                                         onRemoveZone={this.onRemoveZone}
                                                         onEditService={this.onEditService}
+                                                        onRemoveForward={this.onRemoveForward}
                                                         onRemoveService={this.onRemoveService} />
                             )
                         }
