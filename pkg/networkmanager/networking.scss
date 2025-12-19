@@ -22,6 +22,17 @@
   }
 }
 
+.zone-section {
+    .pf-v6-c-title {
+        margin-left: 1rem;
+        margin-bottom: 1rem;
+        
+        &.port-forward-title {
+            margin-top: 2rem;
+        }
+    }
+}
+
 #network-interface {
   @at-root {
     .network-interface-status > span {
