@@ -172,6 +172,43 @@ function portRow(props) {
     });
 }
 
+function cockpitPortRow(props) {
+    function onRemovePort(event) {
+        props.onRemovePort(props.port, props.protocol);
+        event.stopPropagation();
+    }
+
+    const columns = [
+        {
+            title: _("Cockpit"), header: true
+        },
+        {
+            title: props.protocol === "tcp" ? props.port : ""
+        },
+        {
+            title: props.protocol === "udp" ? props.port : ""
+        },
+    ];
+
+    if (!props.readonly) {
+        columns.push({
+            title: <DeleteDropdown items={[{
+                text: _("Delete"),
+                danger: true,
+                ariaLabel: cockpit.format(_("Remove port $0/$1"), props.port, props.protocol),
+                handleClick: onRemovePort
+            }]} />
+        });
+    }
+
+    return ({
+        props: { key: `cockpit-port-${props.protocol}-${props.port}`, 'data-row-id': `cockpit-port-${props.protocol}-${props.port}` },
+        columns,
+        hasPadding: true,
+        expandedContent: <p>{_("netFIELD OS Cockpit port")}</p>,
+    });
+}
+
 function portForwardRow(props) {
     function onRemove(event) {
         props.onRemoveForward(props.forward);
@@ -356,6 +393,44 @@ function ZoneSection(props) {
         props.onRemoveForward(props.zone.id, forward);
     };
 
+    const cockpitPort = props.zone.ports.find(p => p.port === "55500" && p.protocol === "tcp");
+    const additionalPorts = props.zone.ports.filter(p => p.port !== "55500" || p.protocol !== "tcp");
+
+    const rows = props.zone.services.map(s => {
+        if (s in firewall.services) {
+            return serviceRow({
+                key: firewall.services[s].id,
+                service: firewall.services[s],
+                onRemoveService: service => props.onRemoveService(props.zone.id, service),
+                onEditService: service => props.onEditService(props.zone, firewall.services[service]),
+                readonly: firewall.readonly,
+            });
+        } else {
+            return null;
+        }
+    }).concat(
+        cockpitPort
+            ? cockpitPortRow({
+                zone: props.zone,
+                port: cockpitPort.port,
+                protocol: cockpitPort.protocol,
+                onRemovePort: (port, protocol) => props.onRemovePort(props.zone.id, port, protocol),
+                readonly: firewall.readonly,
+            })
+            : []
+    ).concat(
+        additionalPorts.length > 0
+            ? portRow({
+                key: props.zone.id + "-ports",
+                zone: {
+                    ...props.zone,
+                    ports: additionalPorts,
+                },
+                readonly: firewall.readonly
+            })
+            : []
+    ).filter(Boolean);
+
     const actions = !firewall.readonly && <Flex spaceItems={{ default: 'spaceItemsMd' }}>{addServiceAction}{addPortForwardAction}{deleteButton}</Flex>;
 
     return <Card isPlain className="zone-section" data-id={props.zone.id}>
@@ -384,28 +459,7 @@ function ZoneSection(props) {
                           aria-label={props.zone.id}
                           variant="compact"
                           emptyCaption={_("There are no active services in this zone")}
-                          rows={
-                              props.zone.services.map(s => {
-                                  if (s in firewall.services) {
-                                      return serviceRow({
-                                          key: firewall.services[s].id,
-                                          service: firewall.services[s],
-                                          onRemoveService: service => props.onRemoveService(props.zone.id, service),
-                                          onEditService: service => props.onEditService(props.zone, firewall.services[service]),
-                                          readonly: firewall.readonly,
-                                      });
-                                  } else {
-                                      return null;
-                                  }
-                              }).concat(
-                                  props.zone.ports.length > 0
-                                      ? portRow({
-                                          key: props.zone.id + "-ports",
-                                          zone: props.zone,
-                                          readonly: firewall.readonly
-                                      })
-                                      : [])
-                                      .filter(Boolean)}
+                          rows={rows}
 
             />
         </CardBody>}
@@ -968,22 +1022,26 @@ class ActivateZoneModal extends React.Component {
 
     save(event) {
         const Dialogs = this.context;
-        let p;
-        if (firewall.zones[this.state.zone].services.indexOf("cockpit") === -1)
-            p = firewall.addService(this.state.zone, "cockpit");
-        else
-            p = Promise.resolve();
+        const zone = firewall.zones[this.state.zone];
+        const zonePorts = zone.ports || [];
+        const changes = [];
+
+        if (zone.services.indexOf("https") === -1)
+            changes.push(firewall.addService(this.state.zone, "https"));
+
+        if (!zonePorts.some(p => p.port === "55500" && p.protocol === "tcp"))
+            changes.push(firewall.addPort(this.state.zone, "55500", "tcp"));
 
         const sources = this.state.ipRange === "ip-range" ? this.state.ipRangeValue.split(",").map(ip => ip.trim()) : [];
-        p.then(() =>
-            firewall.activateZone(this.state.zone, [...this.state.interfaces], sources)
-                    .then(Dialogs.close)
-                    .catch(error => {
-                        this.setState({
-                            dialogError: _("Failed to add zone"),
-                            dialogErrorDetail: error.name + ": " + error.message,
-                        });
-                    }));
+        Promise.all(changes)
+                .then(() => firewall.activateZone(this.state.zone, [...this.state.interfaces], sources))
+                .then(Dialogs.close)
+                .catch(error => {
+                    this.setState({
+                        dialogError: _("Failed to add zone"),
+                        dialogErrorDetail: error.name + ": " + error.message,
+                    });
+                });
 
         if (event)
             event.preventDefault();
@@ -1050,7 +1108,7 @@ class ActivateZoneModal extends React.Component {
                             <div id="add-zone-services-readonly">
                                 { (this.state.zone && firewall.zones[this.state.zone].services.join(", ")) || _("None") }
                             </div>
-                            <FormHelper helperText={_("The cockpit service is automatically included")} />
+                            <FormHelper helperText={_("The https service and TCP port 55500 are automatically included")} />
                         </FormGroup>
 
                         <FormGroup label={ _("Interfaces") } hasNoPaddingTop isInline>
@@ -1147,6 +1205,7 @@ export class Firewall extends React.Component {
         this.openAddZoneDialog = this.openAddZoneDialog.bind(this);
         this.onRemoveZone = this.onRemoveZone.bind(this);
         this.onRemoveService = this.onRemoveService.bind(this);
+        this.onRemovePort = this.onRemovePort.bind(this);
         this.onEditService = this.onEditService.bind(this);
         this.onRemoveForward = this.onRemoveForward.bind(this);
     }
@@ -1180,8 +1239,8 @@ export class Firewall extends React.Component {
     onRemoveZone(zone) {
         const Dialogs = this.context;
         let body;
-        if (firewall.zones[zone].services.indexOf("cockpit") !== -1)
-            body = _("This zone contains the cockpit service. Make sure that this zone does not apply to your current web console connection.");
+        if (firewall.zones[zone].services.indexOf("https") !== -1)
+            body = _("This zone contains the htpps service. Make sure that this zone does not apply to your current web console connection.");
         else
             body = _("Removing the zone will remove all services within it.");
         Dialogs.show(<DeleteConfirmationModal title={ cockpit.format(_("Remove zone $0"), zone) }
@@ -1197,8 +1256,8 @@ export class Firewall extends React.Component {
 
     onRemoveService(zone, service) {
         const Dialogs = this.context;
-        if (service === 'cockpit') {
-            const body = _("Removing the cockpit service might result in the web console becoming unreachable. Make sure that this zone does not apply to your current web console connection.");
+        if (service === 'https') {
+            const body = _("Removing the htpps service might result in the web console becoming unreachable. Make sure that this zone does not apply to your current web console connection.");
             Dialogs.show(<DeleteConfirmationModal title={ cockpit.format(_("Remove $0 service from $1 zone"), service, zone) }
                                                   body={body}
                                                   target={service}
@@ -1211,6 +1270,10 @@ export class Firewall extends React.Component {
         } else {
             firewall.removeService(zone, service);
         }
+    }
+
+    onRemovePort(zone, port, protocol) {
+        firewall.removePort(zone, port, protocol);
     }
 
     onEditService(zone, service) {
@@ -1312,6 +1375,7 @@ export class Firewall extends React.Component {
                                                         onRemoveZone={this.onRemoveZone}
                                                         onEditService={this.onEditService}
                                                         onRemoveForward={this.onRemoveForward}
+                                                        onRemovePort={this.onRemovePort}
                                                         onRemoveService={this.onRemoveService} />
                             )
                         }
