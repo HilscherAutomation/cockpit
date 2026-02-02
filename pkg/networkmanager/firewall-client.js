@@ -511,6 +511,38 @@ firewall.addService = (zone, service) => {
 };
 
 /*
+ * Add a port/protocol pair to the specified zone.
+ *
+ * Returns a promise that resolves when the port is added.
+ */
+firewall.addPort = (zone, port, protocol) => {
+    return firewalld_dbus.call('/org/fedoraproject/FirewallD1',
+                               'org.fedoraproject.FirewallD1.zone',
+                               'addPort', [zone, port, protocol, 0])
+            .then(reply => firewalld_dbus.call('/org/fedoraproject/FirewallD1/config',
+                                               'org.fedoraproject.FirewallD1.config',
+                                               'getZoneByName', [zone]))
+            .then(path => firewalld_dbus.call(path[0], 'org.fedoraproject.FirewallD1.config.zone',
+                                              'addPort', [port, protocol]));
+};
+
+/*
+ * Remove a port/protocol pair from the specified zone.
+ *
+ * Returns a promise that resolves when the port is removed.
+ */
+firewall.removePort = (zone, port, protocol) => {
+    return firewalld_dbus.call('/org/fedoraproject/FirewallD1',
+                               'org.fedoraproject.FirewallD1.zone',
+                               'removePort', [zone, port, protocol])
+            .then(reply => firewalld_dbus.call('/org/fedoraproject/FirewallD1/config',
+                                               'org.fedoraproject.FirewallD1.config',
+                                               'getZoneByName', [zone]))
+            .then(path => firewalld_dbus.call(path[0], 'org.fedoraproject.FirewallD1.config.zone',
+                                              'removePort', [port, protocol]));
+};
+
+/*
  * Like addService(), but adds multiple predefined firewalld services at once
  * to the specified zones.
  *
@@ -545,9 +577,12 @@ firewall.activateZone = (zone, interfaces, sources) => {
             subscription.remove();
         });
 
-        return firewalld_dbus.call(path[0],
+         return firewalld_dbus.call(path[0],
                                    'org.fedoraproject.FirewallD1.config.zone',
-                                   'update2', [{ interfaces: { t: 'as', v: interfaces }, sources: { t: 'as', v: sources } }]);
+                                   'update2', [{ interfaces: { t: 'as', v: interfaces }, sources: { t: 'as', v: sources } }])
+                                .then(() => firewalld_dbus.call('/org/fedoraproject/FirewallD1',
+                                                                'org.fedoraproject.FirewallD1',
+                                                                'runtimeToPermanent', []));
     });
     return p;
 };
@@ -581,7 +616,10 @@ firewall.deactiveateZone = (zone) => {
 
         return firewalld_dbus.call(path[0],
                                    'org.fedoraproject.FirewallD1.config.zone',
-                                   'update2', [{ interfaces: { t: 'as', v: [] }, sources: { t: 'as', v: [] } }]);
+                                   'update2', [{ interfaces: { t: 'as', v: [] }, sources: { t: 'as', v: [] } }])
+                                .then(() => firewalld_dbus.call('/org/fedoraproject/FirewallD1',
+                                                                'org.fedoraproject.FirewallD1',
+                                                                'runtimeToPermanent', []));
     });
 
     return p.catch(error => console.warn(error));
