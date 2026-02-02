@@ -969,8 +969,8 @@ class ActivateZoneModal extends React.Component {
     save(event) {
         const Dialogs = this.context;
         let p;
-        if (firewall.zones[this.state.zone].services.indexOf("cockpit") === -1)
-            p = firewall.addService(this.state.zone, "cockpit");
+        if (firewall.zones[this.state.zone].services.indexOf("https") === -1)
+            p = firewall.addService(this.state.zone, "https");
         else
             p = Promise.resolve();
 
@@ -1050,7 +1050,7 @@ class ActivateZoneModal extends React.Component {
                             <div id="add-zone-services-readonly">
                                 { (this.state.zone && firewall.zones[this.state.zone].services.join(", ")) || _("None") }
                             </div>
-                            <FormHelper helperText={_("The cockpit service is automatically included")} />
+                            <FormHelper helperText={_("The https service is automatically included")} />
                         </FormGroup>
 
                         <FormGroup label={ _("Interfaces") } hasNoPaddingTop isInline>
@@ -1180,8 +1180,8 @@ export class Firewall extends React.Component {
     onRemoveZone(zone) {
         const Dialogs = this.context;
         let body;
-        if (firewall.zones[zone].services.indexOf("cockpit") !== -1)
-            body = _("This zone contains the cockpit service. Make sure that this zone does not apply to your current web console connection.");
+        if (firewall.zones[zone].services.indexOf("https") !== -1)
+            body = _("This zone contains the htpps service. Make sure that this zone does not apply to your current web console connection.");
         else
             body = _("Removing the zone will remove all services within it.");
         Dialogs.show(<DeleteConfirmationModal title={ cockpit.format(_("Remove zone $0"), zone) }
@@ -1197,8 +1197,8 @@ export class Firewall extends React.Component {
 
     onRemoveService(zone, service) {
         const Dialogs = this.context;
-        if (service === 'cockpit') {
-            const body = _("Removing the cockpit service might result in the web console becoming unreachable. Make sure that this zone does not apply to your current web console connection.");
+        if (service === 'https') {
+            const body = _("Removing the htpps service might result in the web console becoming unreachable. Make sure that this zone does not apply to your current web console connection.");
             Dialogs.show(<DeleteConfirmationModal title={ cockpit.format(_("Remove $0 service from $1 zone"), service, zone) }
                                                   body={body}
                                                   target={service}
