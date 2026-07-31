@@ -134,11 +134,19 @@ export class SystemInformationCard extends React.Component {
                         </tbody>
                     </table>
                 </CardBody>
-                <CardFooter>
-                    <Button isInline variant="link" component="a" onClick={ev => { ev.preventDefault(); cockpit.jump("/system/hwinfo", cockpit.transport.host) }}>
-                        {_("View hardware details")}
-                    </Button>
-                </CardFooter>
+                {/*
+                 * Some devices, especially many ARM systems, do not support DMI/DeviceTree
+                 * hardware information. Only render the hardware details footer when a model
+                 * string was successfully obtained. This is a better user experience than showing
+                 * a link that leads to an empty page.
+                 */}
+                {this.state.model && (
+                    <CardFooter>
+                        <Button isInline variant="link" component="a" onClick={ev => { ev.preventDefault(); cockpit.jump("/system/hwinfo", cockpit.transport.host) }}>
+                            {_("View hardware details")}
+                        </Button>
+                    </CardFooter>
+                )}
             </Card>
         );
     }
