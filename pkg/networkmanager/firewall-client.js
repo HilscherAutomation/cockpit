@@ -511,6 +511,22 @@ firewall.addService = (zone, service) => {
 };
 
 /*
+ * Add a port/protocol pair to the specified zone.
+ *
+ * Returns a promise that resolves when the port is added.
+ */
+firewall.addPort = (zone, port, protocol) => {
+    return firewalld_dbus.call('/org/fedoraproject/FirewallD1',
+                               'org.fedoraproject.FirewallD1.zone',
+                               'addPort', [zone, port, protocol, 0])
+            .then(reply => firewalld_dbus.call('/org/fedoraproject/FirewallD1/config',
+                                               'org.fedoraproject.FirewallD1.config',
+                                               'getZoneByName', [zone]))
+            .then(path => firewalld_dbus.call(path[0], 'org.fedoraproject.FirewallD1.config.zone',
+                                              'addPort', [port, protocol]));
+};
+
+/*
  * Like addService(), but adds multiple predefined firewalld services at once
  * to the specified zones.
  *

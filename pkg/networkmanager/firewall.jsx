@@ -968,22 +968,26 @@ class ActivateZoneModal extends React.Component {
 
     save(event) {
         const Dialogs = this.context;
-        let p;
-        if (firewall.zones[this.state.zone].services.indexOf("https") === -1)
-            p = firewall.addService(this.state.zone, "https");
-        else
-            p = Promise.resolve();
+        const zone = firewall.zones[this.state.zone];
+        const zonePorts = zone.ports || [];
+        const changes = [];
+
+        if (zone.services.indexOf("https") === -1)
+            changes.push(firewall.addService(this.state.zone, "https"));
+
+        if (!zonePorts.some(p => p.port === "5600" && p.protocol === "tcp"))
+            changes.push(firewall.addPort(this.state.zone, "5600", "tcp"));
 
         const sources = this.state.ipRange === "ip-range" ? this.state.ipRangeValue.split(",").map(ip => ip.trim()) : [];
-        p.then(() =>
-            firewall.activateZone(this.state.zone, [...this.state.interfaces], sources)
-                    .then(Dialogs.close)
-                    .catch(error => {
-                        this.setState({
-                            dialogError: _("Failed to add zone"),
-                            dialogErrorDetail: error.name + ": " + error.message,
-                        });
-                    }));
+        Promise.all(changes)
+                .then(() => firewall.activateZone(this.state.zone, [...this.state.interfaces], sources))
+                .then(Dialogs.close)
+                .catch(error => {
+                    this.setState({
+                        dialogError: _("Failed to add zone"),
+                        dialogErrorDetail: error.name + ": " + error.message,
+                    });
+                });
 
         if (event)
             event.preventDefault();
@@ -1050,7 +1054,7 @@ class ActivateZoneModal extends React.Component {
                             <div id="add-zone-services-readonly">
                                 { (this.state.zone && firewall.zones[this.state.zone].services.join(", ")) || _("None") }
                             </div>
-                            <FormHelper helperText={_("The https service is automatically included")} />
+                            <FormHelper helperText={_("The https service and TCP port 5600 are automatically included")} />
                         </FormGroup>
 
                         <FormGroup label={ _("Interfaces") } hasNoPaddingTop isInline>
