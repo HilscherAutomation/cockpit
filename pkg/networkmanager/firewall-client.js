@@ -527,6 +527,22 @@ firewall.addPort = (zone, port, protocol) => {
 };
 
 /*
+ * Remove a port/protocol pair from the specified zone.
+ *
+ * Returns a promise that resolves when the port is removed.
+ */
+firewall.removePort = (zone, port, protocol) => {
+    return firewalld_dbus.call('/org/fedoraproject/FirewallD1',
+                               'org.fedoraproject.FirewallD1.zone',
+                               'removePort', [zone, port, protocol])
+            .then(reply => firewalld_dbus.call('/org/fedoraproject/FirewallD1/config',
+                                               'org.fedoraproject.FirewallD1.config',
+                                               'getZoneByName', [zone]))
+            .then(path => firewalld_dbus.call(path[0], 'org.fedoraproject.FirewallD1.config.zone',
+                                              'removePort', [port, protocol]));
+};
+
+/*
  * Like addService(), but adds multiple predefined firewalld services at once
  * to the specified zones.
  *

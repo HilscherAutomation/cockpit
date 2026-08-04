@@ -172,6 +172,43 @@ function portRow(props) {
     });
 }
 
+function cockpitPortRow(props) {
+    function onRemovePort(event) {
+        props.onRemovePort(props.port, props.protocol);
+        event.stopPropagation();
+    }
+
+    const columns = [
+        {
+            title: _("Cockpit"), header: true
+        },
+        {
+            title: props.protocol === "tcp" ? props.port : ""
+        },
+        {
+            title: props.protocol === "udp" ? props.port : ""
+        },
+    ];
+
+    if (!props.readonly) {
+        columns.push({
+            title: <DeleteDropdown items={[{
+                text: _("Delete"),
+                danger: true,
+                ariaLabel: cockpit.format(_("Remove port $0/$1"), props.port, props.protocol),
+                handleClick: onRemovePort
+            }]} />
+        });
+    }
+
+    return ({
+        props: { key: `cockpit-port-${props.protocol}-${props.port}`, 'data-row-id': `cockpit-port-${props.protocol}-${props.port}` },
+        columns,
+        hasPadding: true,
+        expandedContent: <p>{_("netFIELD OS Cockpit port")}</p>,
+    });
+}
+
 function portForwardRow(props) {
     function onRemove(event) {
         props.onRemoveForward(props.forward);
@@ -356,6 +393,44 @@ function ZoneSection(props) {
         props.onRemoveForward(props.zone.id, forward);
     };
 
+    const cockpitPort = props.zone.ports.find(p => p.port === "5600" && p.protocol === "tcp");
+    const additionalPorts = props.zone.ports.filter(p => p.port !== "5600" || p.protocol !== "tcp");
+
+    const rows = props.zone.services.map(s => {
+        if (s in firewall.services) {
+            return serviceRow({
+                key: firewall.services[s].id,
+                service: firewall.services[s],
+                onRemoveService: service => props.onRemoveService(props.zone.id, service),
+                onEditService: service => props.onEditService(props.zone, firewall.services[service]),
+                readonly: firewall.readonly,
+            });
+        } else {
+            return null;
+        }
+    }).concat(
+        cockpitPort
+            ? cockpitPortRow({
+                zone: props.zone,
+                port: cockpitPort.port,
+                protocol: cockpitPort.protocol,
+                onRemovePort: (port, protocol) => props.onRemovePort(props.zone.id, port, protocol),
+                readonly: firewall.readonly,
+            })
+            : []
+    ).concat(
+        additionalPorts.length > 0
+            ? portRow({
+                key: props.zone.id + "-ports",
+                zone: {
+                    ...props.zone,
+                    ports: additionalPorts,
+                },
+                readonly: firewall.readonly
+            })
+            : []
+    ).filter(Boolean);
+
     const actions = !firewall.readonly && <Flex spaceItems={{ default: 'spaceItemsMd' }}>{addServiceAction}{addPortForwardAction}{deleteButton}</Flex>;
 
     return <Card isPlain className="zone-section" data-id={props.zone.id}>
@@ -384,28 +459,7 @@ function ZoneSection(props) {
                           aria-label={props.zone.id}
                           variant="compact"
                           emptyCaption={_("There are no active services in this zone")}
-                          rows={
-                              props.zone.services.map(s => {
-                                  if (s in firewall.services) {
-                                      return serviceRow({
-                                          key: firewall.services[s].id,
-                                          service: firewall.services[s],
-                                          onRemoveService: service => props.onRemoveService(props.zone.id, service),
-                                          onEditService: service => props.onEditService(props.zone, firewall.services[service]),
-                                          readonly: firewall.readonly,
-                                      });
-                                  } else {
-                                      return null;
-                                  }
-                              }).concat(
-                                  props.zone.ports.length > 0
-                                      ? portRow({
-                                          key: props.zone.id + "-ports",
-                                          zone: props.zone,
-                                          readonly: firewall.readonly
-                                      })
-                                      : [])
-                                      .filter(Boolean)}
+                          rows={rows}
 
             />
         </CardBody>}
@@ -1151,6 +1205,7 @@ export class Firewall extends React.Component {
         this.openAddZoneDialog = this.openAddZoneDialog.bind(this);
         this.onRemoveZone = this.onRemoveZone.bind(this);
         this.onRemoveService = this.onRemoveService.bind(this);
+        this.onRemovePort = this.onRemovePort.bind(this);
         this.onEditService = this.onEditService.bind(this);
         this.onRemoveForward = this.onRemoveForward.bind(this);
     }
@@ -1215,6 +1270,10 @@ export class Firewall extends React.Component {
         } else {
             firewall.removeService(zone, service);
         }
+    }
+
+    onRemovePort(zone, port, protocol) {
+        firewall.removePort(zone, port, protocol);
     }
 
     onEditService(zone, service) {
@@ -1316,6 +1375,7 @@ export class Firewall extends React.Component {
                                                         onRemoveZone={this.onRemoveZone}
                                                         onEditService={this.onEditService}
                                                         onRemoveForward={this.onRemoveForward}
+                                                        onRemovePort={this.onRemovePort}
                                                         onRemoveService={this.onRemoveService} />
                             )
                         }
