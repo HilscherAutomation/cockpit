@@ -118,8 +118,9 @@ function parseDMIFields(text) {
 }
 
 export function dmi_info() {
+    // The trailing slash makes grep treat the symlink as a directory.
     // the grep often/usually exits with 2, that's okay as long as we find *some* information
-    return cockpit.script("grep -r . /sys/class/dmi/id || true", null,
+    return cockpit.script("grep -r . /sys/class/dmi/id/ || true", null,
                           { err: "message", superuser: "try" })
             .then((output) => parseDMIFields(output));
 }
